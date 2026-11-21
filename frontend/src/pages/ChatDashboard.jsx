@@ -477,7 +477,7 @@ export default function ChatDashboard({ user, onLogout }) {
           style={{ scrollbarGutter: 'stable' }}
           className="flex-1 w-full min-w-0 px-3.5 py-5 sm:px-6 sm:py-6 overflow-y-auto overflow-x-hidden scroll-smooth"
         >
-          <div className="max-w-4xl w-full min-w-0 mx-auto flex flex-col gap-5 sm:gap-6">
+          <div className="max-w-3xl w-full min-w-0 mx-auto flex flex-col gap-5 sm:gap-6">
             {messages.length === 0 ? (
               <div className={`text-center mt-16 sm:mt-20 px-4 text-sm ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
                 {t('typeQueryPrompt')}
@@ -518,13 +518,20 @@ export default function ChatDashboard({ user, onLogout }) {
           </div>
         </main>
 
-        {/* Chat Input Bar */}
-        <footer className={`p-3 sm:p-4 border-t shrink-0 min-w-0 transition-colors ${
+        {/* Chat Input Bar - pb-16 clears the floating bottom-right Netlify badge on both phone and laptop */}
+        <footer className={`px-3.5 pt-3 pb-16 sm:px-6 sm:pt-3.5 sm:pb-16 border-t shrink-0 min-w-0 transition-colors ${
           isDark
             ? 'bg-slate-800/80 border-slate-700/80'
             : 'bg-white/80 border-slate-200 shadow-sm'
         }`}>
-          <form onSubmit={handleSend} className="max-w-4xl w-full min-w-0 mx-auto flex items-end gap-2">
+          <form
+            onSubmit={handleSend}
+            className={`max-w-3xl w-full min-w-0 mx-auto flex items-end gap-2 rounded-xl border px-3 py-2 focus-within:border-emerald-500 transition-colors ${
+              isDark
+                ? 'bg-slate-900 border-slate-700'
+                : 'bg-slate-50 border-slate-300'
+            }`}
+          >
             <textarea
               ref={textareaRef}
               rows={1}
@@ -532,17 +539,18 @@ export default function ChatDashboard({ user, onLogout }) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={effectiveUser ? t('askQuestion') : t('loginRequired')}
-              className={`flex-1 min-w-0 w-full rounded-lg px-3.5 sm:px-4 py-2.5 text-sm border focus:outline-none focus:border-emerald-500 transition-colors resize-none leading-5 max-h-36 overflow-y-auto break-words ${
+              className={`flex-1 min-w-0 w-full bg-transparent px-1 py-1 text-sm focus:outline-none resize-none leading-5 max-h-36 overflow-y-auto break-words ${
                 isDark
-                  ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500'
-                  : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400'
+                  ? 'text-white placeholder-slate-500'
+                  : 'text-slate-900 placeholder-slate-400'
               }`}
               disabled={isLoading}
             />
             <button
               type="submit"
               disabled={isLoading}
-              className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold px-3.5 sm:px-5 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer text-sm disabled:opacity-50 shrink-0"
+              aria-label={t('send')}
+              className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold px-3.5 py-2 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer text-sm disabled:opacity-50 shrink-0"
             >
               <Send className="w-4 h-4 shrink-0" />
               <span className="hidden sm:inline">{t('send')}</span>

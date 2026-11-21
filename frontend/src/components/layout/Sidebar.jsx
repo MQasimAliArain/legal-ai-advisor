@@ -322,7 +322,7 @@ export default function Sidebar({
         </div>
 
         {/* Footer Actions: Settings & Profile */}
-        <div className={`pt-4 border-t space-y-3 shrink-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
+        <div className={`pt-4 pb-12 md:pb-2 border-t space-y-3 shrink-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
           {/* Settings option - accessible only when user is logged in */}
           {user && (
             <button 
@@ -693,7 +693,7 @@ export default function Sidebar({
               </div>
               <div>
                 <h3 className="text-base font-bold">Share Legal Query</h3>
-                <p className={`text-xs truncatemax-w-[280px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>"{shareChat.title}"</p>
+                <p className={`text-xs truncate max-w-[280px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>"{shareChat.title}"</p>
               </div>
             </div>
 
