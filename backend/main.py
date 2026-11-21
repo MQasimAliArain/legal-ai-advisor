@@ -161,6 +161,8 @@ def startup_event():
         print(f"Collection load error: {e}")
         collection = None
     build_bm25_index()
+
+
 def embed_query(text: str) -> List[float]:
     if model is None:
         raise RuntimeError("Embedding model is not initialized.")
@@ -247,6 +249,31 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
             "wearing apparel",
             "keep all these items",
             "keep items",
+            "permanent",
+            "permanently",
+            "documents",
+        ]
+    )
+    is_search_woman_query = any(
+        k in q_lower
+        for k in [
+            "woman",
+            "female",
+            "decency",
+            "search a woman",
+            "searched",
+        ]
+    )
+    is_language_culture_query = any(
+        k in q_lower
+        for k in [
+            "language",
+            "script",
+            "culture",
+            "cultural",
+            "preserve",
+            "promote",
+            "citizen",
         ]
     )
     is_torture_query = any(
@@ -264,9 +291,17 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
             f"{query} safeguards as to arrest and detention grounds for such arrest "
             f"legal practitioner twenty-four hours magistrate"
         )
+    elif is_search_woman_query and "woman" in q_lower:
+        retrieval_query = (
+            f"{query} search of woman another woman strict regard to decency"
+        )
     elif is_search_items_query:
         retrieval_query = (
             f"{query} searched articles found upon him safe custody wearing apparel"
+        )
+    elif is_language_culture_query:
+        retrieval_query = (
+            f"{query} language script culture preserve promote citizens"
         )
     elif is_torture_query:
         retrieval_query = (
@@ -332,7 +367,15 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
             else:
                 combined += 0.12
 
-        if is_search_items_query and "articles found upon him" in lower:
+        if is_search_woman_query and "woman" in q_lower and ("woman" in lower or "decency" in lower):
+            combined += 0.35
+
+        if is_search_items_query and ("articles found upon him" in lower or "safe custody" in lower):
+            combined += 0.35
+
+        if is_language_culture_query and "constitution" in book_lower and (
+            "language" in lower or "script" in lower or "culture" in lower
+        ):
             combined += 0.35
 
         if is_torture_query and "constitution" in book_lower and ("dignity" in lower or "torture" in lower):
@@ -407,10 +450,13 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
 
     scope_rule = (
         "STRICT GROUNDING & OUT-OF-SCOPE RULE: Your corpus ONLY contains the Constitution of Pakistan (1973) and "
-        "the Code of Criminal Procedure (CrPC 1898), which is a procedural law. The Pakistan Penal Code (PPC) and "
-        "civil contract/loan statutes are NOT in your corpus. If the user asks whether an act is cheating/a crime, "
-        "asks which offences were committed, or asks for the punishment/definition of a substantive crime, output "
-        "ONLY the exact token: OUT_OF_SCOPE"
+        "the Code of Criminal Procedure (CrPC 1898). Whenever the provided excerpts contain relevant Articles "
+        "or Sections (including fundamental rights, arrest/search procedures, safe custody of articles, search of "
+        "women, torture/dignity, or language/culture), you MUST answer using those excerpts—do NOT treat a "
+        "question as out of scope just because it mentions property, police searches, citizens, or offences. "
+        "Only output the exact token OUT_OF_SCOPE when the provided excerpts clearly do not address the question "
+        "at all (for example, specific PPC criminal definitions/punishments or unrelated statutes like family/tax/corporate "
+        "law not present in the excerpts)."
     )
 
     citation_rule = (
@@ -515,7 +561,7 @@ def chat_endpoint(payload: ChatRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"ChromaDB query failed: {exc}")
 
-    if not top_passages or top_passages[0]["final_score"] < 0.28:
+    if not top_passages or top_passages[0]["final_score"] < 0.15:
         return ChatResponse(
             reply=OUT_OF_SCOPE_MSG,
             reference=None,
@@ -535,7 +581,7 @@ def chat_endpoint(payload: ChatRequest):
         single_reference = str(top_passages[0].get("book_title") or "Legal Reference").strip()
 
     llm_reply = generate_with_llm(query, top_passages)
-    if llm_reply and "OUT_OF_SCOPE" in llm_reply:
+    if llm_reply and llm_reply.strip().upper() == "OUT_OF_SCOPE":
         return ChatResponse(
             reply=OUT_OF_SCOPE_MSG,
             reference=None,

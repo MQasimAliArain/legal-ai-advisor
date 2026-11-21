@@ -1,13 +1,19 @@
 // book_ingest/ingest.mjs
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import { ChromaClient } from "chromadb";
 import { pipeline } from "@huggingface/transformers";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const CHROMA_URL = process.env.CHROMA_URL || "http://localhost:8000";
 const COLLECTION_NAME = process.env.CHROMA_COLLECTION || "legal_book_chunks";
-const BOOKS_FOLDER = path.resolve("..", "books_raw");
+const BOOKS_FOLDER = fs.existsSync(path.resolve(__dirname, "..", "books_raw"))
+  ? path.resolve(__dirname, "..", "books_raw")
+  : path.resolve("..", "books_raw");
 const MAX_CHUNK_CHARS = 1100;
 const OVERLAP_CHARS = 220;
 
