@@ -49,6 +49,12 @@ export default function ChatDashboard({ user, onLogout }) {
   );
   const [isLoading, setIsLoading] = useState(false);
   const [activeUser, setActiveUser] = useState(user || null);
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window !== 'undefined'
+      ? Math.round(window.visualViewport?.height || window.innerHeight)
+      : null
+  );
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
 
   const chatContainerRef = useRef(null);
   const textareaRef = useRef(null);
@@ -58,6 +64,43 @@ export default function ChatDashboard({ user, onLogout }) {
   const { lang, t } = useLanguage();
   const { isDark } = useTheme();
   const navigate = useNavigate();
+
+  // Sync container height with visualViewport on mobile when virtual keyboard opens/closes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateViewport = () => {
+      const isMobile = window.innerWidth < 768;
+      const vv = window.visualViewport;
+      const currentHeight = Math.round(vv?.height || window.innerHeight);
+
+      if (isMobile) {
+        setViewportHeight(currentHeight);
+        const keyboardVisible = window.innerHeight - currentHeight > 120;
+        setIsKeyboardOpen(keyboardVisible);
+        if (keyboardVisible || document.activeElement === textareaRef.current) {
+          requestAnimationFrame(() => {
+            scrollToBottom('auto');
+          });
+        }
+      } else {
+        setViewportHeight(null);
+        setIsKeyboardOpen(false);
+      }
+    };
+
+    updateViewport();
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', updateViewport);
+    vv?.addEventListener('scroll', updateViewport);
+    window.addEventListener('resize', updateViewport);
+
+    return () => {
+      vv?.removeEventListener('resize', updateViewport);
+      vv?.removeEventListener('scroll', updateViewport);
+      window.removeEventListener('resize', updateViewport);
+    };
+  }, []);
 
   // Keep activeUser synced with prop or Supabase session across refresh / tab off-and-on
   useEffect(() => {
@@ -340,6 +383,14 @@ export default function ChatDashboard({ user, onLogout }) {
     }
   };
 
+  const handleInputFocus = () => {
+    shouldAutoScrollRef.current = true;
+    setTimeout(() => {
+      scrollToBottom('auto');
+      textareaRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 250);
+  };
+
   const handleNewChat = () => {
     shouldAutoScrollRef.current = true;
     setMessages([]);
@@ -404,10 +455,15 @@ export default function ChatDashboard({ user, onLogout }) {
     });
   };
 
+  const shellStyle = viewportHeight ? { height: `${viewportHeight}px` } : undefined;
+
   return (
-    <div className={`relative flex h-dvh w-full max-w-full overflow-hidden transition-colors duration-300 ${
-      isDark ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-900'
-    } ${lang === 'ur' ? 'font-sans' : ''}`}>
+    <div
+      style={shellStyle}
+      className={`relative flex h-dvh w-full max-w-full overflow-hidden transition-colors duration-300 ${
+        isDark ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-900'
+      } ${lang === 'ur' ? 'font-sans' : ''}`}
+    >
 
       {/* Mobile Backdrop */}
       {isSidebarOpen && (
@@ -433,7 +489,10 @@ export default function ChatDashboard({ user, onLogout }) {
       />
 
       {/* Main Chat Content */}
-      <div className="flex-1 flex flex-col justify-between h-dvh w-full min-w-0 overflow-hidden">
+      <div
+        style={shellStyle}
+        className="flex-1 flex flex-col justify-between h-dvh w-full min-w-0 overflow-hidden"
+      >
 
         {/* Header */}
         <header className={`py-3.5 px-4 sm:px-6 border-b flex justify-between items-center gap-3 shrink-0 min-w-0 transition-colors ${
@@ -518,12 +577,18 @@ export default function ChatDashboard({ user, onLogout }) {
           </div>
         </main>
 
-        {/* Slim Chat Input Bar positioned beside the bottom-right Netlify badge */}
-        <footer className={`pl-3.5 pr-44 py-2.5 sm:pl-6 sm:pr-48 sm:py-3 border-t shrink-0 min-w-0 transition-colors ${
-          isDark
-            ? 'bg-slate-800/80 border-slate-700/80'
-            : 'bg-white/80 border-slate-200 shadow-sm'
-        }`}>
+        {/* Slim Chat Input Bar that stays visible above the mobile keyboard */}
+        <footer
+          className={`px-3.5 pt-2.5 sm:px-6 sm:pt-3 border-t shrink-0 min-w-0 transition-colors ${
+            isKeyboardOpen
+              ? 'pb-2 pr-3.5 sm:pb-3 sm:pr-48'
+              : 'pb-12 pr-3.5 sm:pb-3 sm:pr-48'
+          } ${
+            isDark
+              ? 'bg-slate-800/80 border-slate-700/80'
+              : 'bg-white/80 border-slate-200 shadow-sm'
+          }`}
+        >
           <form
             onSubmit={handleSend}
             className={`max-w-3xl w-full min-w-0 mx-auto flex items-center gap-2 rounded-xl border px-3 py-1.5 focus-within:border-emerald-500 transition-colors ${
@@ -538,6 +603,7 @@ export default function ChatDashboard({ user, onLogout }) {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              onFocus={handleInputFocus}
               placeholder={effectiveUser ? t('askQuestion') : t('loginRequired')}
               className={`flex-1 min-w-0 w-full bg-transparent px-1 py-1 text-sm focus:outline-none resize-none leading-5 max-h-32 overflow-y-auto break-words ${
                 isDark
