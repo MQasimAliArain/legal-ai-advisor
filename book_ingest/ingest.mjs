@@ -15,7 +15,7 @@ const BOOKS_FOLDER = fs.existsSync(path.resolve(__dirname, "..", "books_raw"))
   ? path.resolve(__dirname, "..", "books_raw")
   : path.resolve("..", "books_raw");
 const MAX_CHUNK_CHARS = 1100;
-const OVERLAP_CHARS = 220;
+const OVERLAP_CHARS = 240;
 
 const parsedChromaUrl = new URL(CHROMA_URL);
 const chroma = new ChromaClient({
@@ -42,12 +42,13 @@ async function extractPdfText(pdfPath) {
 // Split along numbered Article/Section boundaries while keeping headings attached to their clauses
 function splitIntoLegalChunks(rawText) {
   const cleanText = rawText
+    .replace(/\[Page\s+\d+\]\s*/g, " ")
     .replace(/Page\s+\d+\s+of\s+\d+/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
 
   // Split right before numbered provisions like " 1. ", " 2. ", " 4. ", " 154. "
-  const sections = cleanText.split(/(?=\s\d{1,3}[A-Z]?\.\s+[A-Z])/);
+  const sections = cleanText.split(/(?=\b\d{1,3}[A-Z]?\.\s+[A-Z])/);
   const chunks = [];
   let buffer = "";
 

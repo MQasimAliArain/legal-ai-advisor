@@ -75,7 +75,20 @@ LEGAL_SYNONYMS = {
     "police": "police officer magistrate",
     "bail": "bail bailable non-bailable bond",
     "fir": "information cognizable offence officer in charge",
-    "confession": "confession magistrate statement",
+    "confess": "confession witness against himself compelled accused offence",
+    "confession": "confession magistrate statement witness against himself compelled",
+    "force": "compelled torture force coercion accused witness against himself",
+    "forced": "compelled torture force coercion accused witness against himself",
+    "evidence": "evidence confession witness against himself torture",
+    "accused": "accused person charged offence witness against himself",
+    "charged": "charged offence accused person trial",
+    "offence": "offence punishable by law act omitted",
+    "punished": "punished punishment retrospective offence law greater penalty",
+    "punishment": "punishment retrospective offence greater penalty",
+    "retrospective": "retrospective punishment act punishable at the time offence greater penalty",
+    "retroactive": "retrospective punishment act punishable at the time offence greater penalty",
+    "past": "retrospective punishment act punishable at the time offence",
+    "ago": "retrospective punishment act punishable at the time offence",
     "torture": "torture dignity extracting evidence",
     "twice": "same offence more than once acquitted convicted",
     "speech": "freedom of speech and expression restrictions",
@@ -403,7 +416,7 @@ def hybrid_retrieve(query: str, top_k: int = 16) -> List[dict]:
     bm25_hits = bm25_search(expanded_query, top_k=65)
     for doc_id, hit in bm25_hits.items():
         parent_id = hit.get("parent_id", doc_id)
-        parent_vec = candidates[parent_id]["vec_score"] if parent_id in candidates else 0.40
+        parent_vec = candidates[parent_id]["vec_score"] if parent_id in candidates else 0.45
         if doc_id in candidates:
             candidates[doc_id]["bm25_norm"] = hit["bm25_norm"]
         else:
@@ -420,11 +433,11 @@ def hybrid_retrieve(query: str, top_k: int = 16) -> List[dict]:
 
     ranked = []
     for item in candidates.values():
-        combined = 0.48 * item["vec_score"] + 0.52 * item["bm25_norm"]
+        combined = 0.45 * item["vec_score"] + 0.55 * item["bm25_norm"]
         lower = item["cleaned"].lower()
 
-        if "__sub_" in item["id"] and item["bm25_norm"] > 0.35:
-            combined += 0.10
+        if "__sub_" in item["id"] and item["bm25_norm"] > 0.25:
+            combined += 0.12
 
         if (
             "preamble" not in q_lower
@@ -453,7 +466,7 @@ def hybrid_retrieve(query: str, top_k: int = 16) -> List[dict]:
                 selected.append(item)
                 seen_texts.add(sig)
                 added_for_book += 1
-                if added_for_book >= 5:
+                if added_for_book >= 6:
                     break
 
     for item in ranked:
@@ -497,13 +510,14 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
     scope_rule = (
         "STRICT GROUNDING & OUT-OF-SCOPE RULE: Your corpus ONLY contains the Constitution of Pakistan (1973) and "
         "the Code of Criminal Procedure (CrPC 1898). Carefully inspect ALL provided excerpts. Whenever ANY excerpt "
-        "contains an Article or Section that relates to the user's question (including fundamental rights, freedom "
-        "of movement, emergency/proclamation provisions, reasonable restrictions, religious instruction/institutions, "
-        "arrest/search/bail/FIR/procedure, or constitutional principles), you MUST answer clearly and accurately "
-        "using ONLY those excerpts without hallucinating facts outside them. "
-        "Output ONLY the exact token OUT_OF_SCOPE only when NONE of the provided excerpts are relevant to the question "
-        "(such as specific PPC criminal offence definitions/punishments or unrelated statutes like family, labour, "
-        "tax, or corporate law not present in the excerpts)."
+        "contains an Article or Section that relates to the user's question (including fundamental rights, protection "
+        "against retrospective punishment, protection against self-incrimination/confessions/torture, freedom of movement, "
+        "emergency/proclamation provisions, reasonable restrictions, religious instruction/institutions, arrest/search/bail/FIR/procedure, "
+        "or constitutional principles), you MUST answer clearly and accurately using the provided excerpts and your legal "
+        "knowledge of the Constitution of Pakistan (1973) and CrPC (1898) without outputting OUT_OF_SCOPE. "
+        "Output ONLY the exact token OUT_OF_SCOPE only when the question asks about a completely different statute or "
+        "subject outside the Constitution of Pakistan (1973) and CrPC (1898) (such as specific PPC offence penalties, "
+        "family/divorce/inheritance statutes, tax, labour, or corporate law) AND no provided excerpt covers it."
     )
 
     citation_rule = (
@@ -535,7 +549,7 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
     )
 
     system_prompt = (
-        "You are a Pakistani Legal AI Assistant. Always respond strictly in English. Answer using only the "
+        "You are a Pakistani Legal AI Assistant. Always respond strictly in English. Answer using the "
         "provided excerpts from the Constitution of the Islamic Republic of Pakistan (1973) and the Code of "
         "Criminal Procedure (1898). "
         f"{scope_rule} {citation_rule} {formatting_rule} {style_and_length_rule}"
