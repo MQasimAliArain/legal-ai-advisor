@@ -4,7 +4,7 @@ import re
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 from dotenv import load_dotenv
 
@@ -161,6 +161,8 @@ def startup_event():
         print(f"Collection load error: {e}")
         collection = None
     build_bm25_index()
+
+
 def embed_query(text: str) -> List[float]:
     if model is None:
         raise RuntimeError("Embedding model is not initialized.")
@@ -233,6 +235,8 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
             "arrest someone",
             "rights does a person have",
             "safeguards",
+            "24 hours",
+            "magistrate",
         ]
     )
     is_search_items_query = any(
@@ -249,13 +253,29 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
             "keep items",
         ]
     )
-    is_torture_query = any(
+    is_confession_torture_query = any(
         k in q_lower
         for k in [
             "torture",
             "confession",
+            "confess",
+            "witness against",
+            "self-incrimination",
             "extracting evidence",
             "stolen property",
+            "force them to confess",
+        ]
+    )
+    is_double_prosecution_query = any(
+        k in q_lower
+        for k in [
+            "prosecuted twice",
+            "tried again",
+            "two separate firs",
+            "two firs",
+            "same offence",
+            "double jeopardy",
+            "convicted or acquitted",
         ]
     )
 
@@ -268,9 +288,15 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
         retrieval_query = (
             f"{query} searched articles found upon him safe custody wearing apparel"
         )
-    elif is_torture_query:
+    elif is_confession_torture_query:
         retrieval_query = (
-            f"{query} dignity of man torture extracting evidence confession stolen property"
+            f"{query} witness against himself torture extracting evidence confession "
+            f"magistrate voluntary"
+        )
+    elif is_double_prosecution_query:
+        retrieval_query = (
+            f"{query} prosecuted or punished for the same offence more than once "
+            f"once convicted or acquitted tried again"
         )
     elif "equality" in q_lower or "equal protection" in q_lower or "identical treatment" in q_lower:
         retrieval_query = f"{query} equality of citizens equal protection of law"
@@ -326,17 +352,41 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
         lower = item["cleaned"].lower()
         book_lower = item["book_title"].lower()
 
-        if is_arrest_rights_query and "constitution" in book_lower:
-            if "informed, as soon as may be" in lower or "twenty-four hours" in lower or "legal practitioner" in lower:
+        if is_arrest_rights_query:
+            if "constitution" in book_lower and (
+                "informed, as soon as may be" in lower
+                or "twenty-four hours" in lower
+                or "legal practitioner" in lower
+                or "arrest" in lower
+            ):
                 combined += 0.35
-            else:
-                combined += 0.12
+            elif ("criminal" in book_lower or "crpc" in book_lower) and "twenty-four hours" in lower:
+                combined += 0.30
 
         if is_search_items_query and "articles found upon him" in lower:
             combined += 0.35
 
-        if is_torture_query and "constitution" in book_lower and ("dignity" in lower or "torture" in lower):
-            combined += 0.35
+        if is_confession_torture_query:
+            if "constitution" in book_lower and (
+                "dignity" in lower
+                or "torture" in lower
+                or "witness against himself" in lower
+            ):
+                combined += 0.35
+            elif ("criminal" in book_lower or "crpc" in book_lower) and "confession" in lower:
+                combined += 0.30
+
+        if is_double_prosecution_query:
+            if "constitution" in book_lower and (
+                "same offence" in lower
+                or "punished more than once" in lower
+                or "prosecuted or punished" in lower
+            ):
+                combined += 0.35
+            elif ("criminal" in book_lower or "crpc" in book_lower) and (
+                "once convicted or acquitted" in lower or "same offence" in lower
+            ):
+                combined += 0.30
 
         if ("equality" in q_lower or "equal protection" in q_lower) and "equal protection of law" in lower:
             combined += 0.35
@@ -379,6 +429,60 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
     return selected
 
 
+def get_available_provisions(passages: List[dict]) -> List[Tuple[str, str, str]]:
+    """Return (book_title, label_type, number_str) tuples present in retrieved passages."""
+    found: List[Tuple[str, str, str]] = []
+    seen: Set[Tuple[str, str, str]] = set()
+
+    for p in passages:
+        book = str(p.get("book_title") or "Legal Reference").strip()
+        book_lower = book.lower()
+        default_label = "Section" if "criminal" in book_lower or "crpc" in book_lower else "Article"
+
+        prov_str = str(p.get("provisions") or "")
+        for token in re.split(r"[,;\s]+", prov_str):
+            num = token.strip().upper()
+            if re.fullmatch(r"\d{1,3}[A-Z]?", num):
+                key = (book, default_label, num)
+                if key not in seen:
+                    seen.add(key)
+                    found.append(key)
+
+        text = str(p.get("cleaned") or "")
+        for m in re.finditer(r"\b(Article|Section)\s+(\d{1,3}[A-Z]?)\b", text, flags=re.IGNORECASE):
+            lbl = "Article" if m.group(1).lower() == "article" else "Section"
+            num = m.group(2).upper()
+            key = (book, lbl, num)
+            if key not in seen:
+                seen.add(key)
+                found.append(key)
+
+    return found
+
+
+def verify_and_align_reference(reply_text: str, passages: List[dict]) -> Optional[str]:
+    """Ensure the returned reference matches a provision supported by the retrieved passages."""
+    available = get_available_provisions(passages)
+    if not available:
+        if passages:
+            return str(passages[0].get("book_title") or "Legal Reference").strip()
+        return None
+
+    cited_matches = re.findall(r"\b(Article|Section)\s+(\d{1,3}[A-Z]?)\b", reply_text or "", flags=re.IGNORECASE)
+    for lbl_raw, num_raw in cited_matches:
+        lbl = "Article" if lbl_raw.lower() == "article" else "Section"
+        num = num_raw.upper()
+        for book, avail_lbl, avail_num in available:
+            if avail_num == num and avail_lbl == lbl:
+                return f"{book} - {avail_lbl} {avail_num}"
+        for book, avail_lbl, avail_num in available:
+            if avail_num == num:
+                return f"{book} - {avail_lbl} {avail_num}"
+
+    top_book, top_lbl, top_num = available[0]
+    return f"{top_book} - {top_lbl} {top_num}"
+
+
 def is_detailed_query(query: str) -> bool:
     q = (query or "").lower()
     detail_triggers = [
@@ -410,13 +514,16 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
         "the Code of Criminal Procedure (CrPC 1898), which is a procedural law. The Pakistan Penal Code (PPC) and "
         "civil contract/loan statutes are NOT in your corpus. If the user asks whether an act is cheating/a crime, "
         "asks which offences were committed, or asks for the punishment/definition of a substantive crime, output "
-        "ONLY the exact token: OUT_OF_SCOPE"
+        "ONLY the exact token: OUT_OF_SCOPE. However, if the provided excerpts contain relevant constitutional "
+        "rights, arrest/detention safeguards, self-incrimination/torture protections, or double-prosecution rules, "
+        "answer using those provided excerpts rather than marking the question out of scope."
     )
 
     citation_rule = (
         "BOLD ONLY RULE: Do NOT use parenthetical citations like '(Article 14 of the Constitution of Pakistan)'. "
         "Make every Article or Section and its book/statute **bold** directly in the text—for example, "
         "**Article 14 of the Constitution of Pakistan** or **Section 164 of the Code of Criminal Procedure (CrPC)**. "
+        "Only cite Article or Section numbers that actually appear in the provided Context excerpts. "
         "NEVER refer to a chunk/part number as an Article or Section, and NEVER append sub-clause numbers like 'Article 14(2)'."
     )
 
@@ -515,24 +622,12 @@ def chat_endpoint(payload: ChatRequest):
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"ChromaDB query failed: {exc}")
 
-    if not top_passages or top_passages[0]["final_score"] < 0.28:
+    if not top_passages or top_passages[0]["final_score"] < 0.15:
         return ChatResponse(
             reply=OUT_OF_SCOPE_MSG,
             reference=None,
             disclaimer=SHORT_DISCLAIMER,
         )
-
-    single_reference = None
-    for p in top_passages:
-        book = str(p.get("book_title") or "Legal Reference").strip()
-        prov = str(p.get("provisions") or "").strip()
-        if prov:
-            first_prov = prov.split(",")[0].strip()
-            label = "Section" if "criminal" in book.lower() or "crpc" in book.lower() else "Article"
-            single_reference = f"{book} - {label} {first_prov}"
-            break
-    if not single_reference and top_passages:
-        single_reference = str(top_passages[0].get("book_title") or "Legal Reference").strip()
 
     llm_reply = generate_with_llm(query, top_passages)
     if llm_reply and "OUT_OF_SCOPE" in llm_reply:
@@ -551,8 +646,10 @@ def chat_endpoint(payload: ChatRequest):
             disclaimer=SHORT_DISCLAIMER,
         )
 
+    verified_reference = verify_and_align_reference(reply_text, top_passages)
+
     return ChatResponse(
         reply=reply_text,
-        reference=single_reference,
+        reference=verified_reference,
         disclaimer=SHORT_DISCLAIMER,
     )

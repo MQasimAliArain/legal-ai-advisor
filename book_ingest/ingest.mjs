@@ -11,7 +11,12 @@ const BOOKS_FOLDER = path.resolve("..", "books_raw");
 const MAX_CHUNK_CHARS = 1100;
 const OVERLAP_CHARS = 220;
 
-const chroma = new ChromaClient({ path: CHROMA_URL });
+const parsedChromaUrl = new URL(CHROMA_URL);
+const chroma = new ChromaClient({
+  host: parsedChromaUrl.hostname,
+  port: parsedChromaUrl.port ? Number(parsedChromaUrl.port) : (parsedChromaUrl.protocol === "https:" ? 443 : 80),
+  ssl: parsedChromaUrl.protocol === "https:",
+});
 
 async function extractPdfText(pdfPath) {
   const data = new Uint8Array(fs.readFileSync(pdfPath));
@@ -35,8 +40,10 @@ function splitIntoLegalChunks(rawText) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // Split right before numbered provisions like " 1. ", " 2. ", " 4. ", " 154. "
-  const sections = cleanText.split(/(?=\s\d{1,3}[A-Z]?\.\s+[A-Z])/);
+  // Split right before numbered provisions like " 1. ", " 2. ", " 4. ", " 154. " or " Article 10 " / " Section 164 "
+  const sections = cleanText.split(
+    /(?=\s\d{1,3}[A-Z]?\.\s+[A-Z]|\s(?:Article|Section)\s+\d{1,3}[A-Z]?\b)/i
+  );
   const chunks = [];
   let buffer = "";
 
@@ -77,7 +84,10 @@ function splitIntoLegalChunks(rawText) {
 }
 
 function detectProvisionNumbers(text) {
-  const matches = [...text.matchAll(/\b(\d{1,3}[A-Z]?)\.\s+[A-Z]/g)].map((m) => m[1]);
+  const matches = [
+    ...[...text.matchAll(/\b(\d{1,3}[A-Z]?)\.\s+[A-Z]/g)].map((m) => m[1]),
+    ...[...text.matchAll(/\b(?:Article|Section)\s+(\d{1,3}[A-Z]?)\b/gi)].map((m) => m[1]),
+  ];
   const unique = [...new Set(matches)];
   return unique.length > 0 ? unique.slice(0, 6).join(", ") : "";
 }
