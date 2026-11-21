@@ -45,11 +45,18 @@ STOP_WORDS = {
     "do", "are", "was", "were", "be", "been", "with", "from", "by", "under",
     "this", "that", "these", "those", "it", "its", "as", "at", "into",
     "someone", "person", "they", "them", "their", "even", "only", "also",
-    "would", "could", "may", "might", "must", "shall", "any", "all",
+    "would", "could", "may", "might", "must", "shall", "any", "all", "during",
 }
 
-# General legal synonym expansion so everyday user wording matches statutory wording across ALL sections
+# Broad legal & constitutional synonym expansion so everyday wording matches statutory terms
 LEGAL_SYNONYMS = {
+    "movement": "freedom of movement enter and move freely throughout pakistan public interest",
+    "travel": "freedom of movement enter and move freely throughout pakistan",
+    "emergency": "proclamation of emergency fundamental rights suspended public interest",
+    "public": "public interest public order public safety reasonable restrictions",
+    "government": "state federal government provincial government law authority",
+    "restrict": "reasonable restrictions imposed by law subject to any reasonable restrictions",
+    "restriction": "reasonable restrictions imposed by law subject to any reasonable restrictions",
     "apartment": "house place zenana apartment",
     "house": "house place dwelling apartment",
     "home": "house place dwelling apartment",
@@ -71,11 +78,14 @@ LEGAL_SYNONYMS = {
     "confession": "confession magistrate statement",
     "torture": "torture dignity extracting evidence",
     "twice": "same offence more than once acquitted convicted",
-    "speech": "speech expression restrictions",
-    "criticize": "speech expression public order",
+    "speech": "freedom of speech and expression restrictions",
+    "criticize": "freedom of speech and expression public order",
     "language": "language script culture preserve promote",
     "culture": "language script culture preserve promote",
-    "religion": "religion religious freedom profess practice",
+    "religion": "religion religious instruction ceremony worship profess practice",
+    "religious": "religion religious instruction ceremony worship profess practice",
+    "institution": "educational institution receiving aid",
+    "school": "educational institution receiving aid",
     "property": "property acquire hold dispose",
     "equality": "equality equal protection citizens",
     "life": "life liberty security person",
@@ -84,6 +94,12 @@ LEGAL_SYNONYMS = {
     "judge": "magistrate court judge session",
     "witness": "witness examination summons",
     "warrant": "warrant arrest search summons",
+    "assembly": "freedom of assembly peaceful without arms",
+    "association": "freedom of association unions",
+    "trade": "freedom of trade business or profession",
+    "remand": "remand custody magistrate detention",
+    "trial": "trial court inquiry magistrate charge",
+    "appeal": "appeal court conviction sentence",
 }
 
 app = FastAPI(title="Legal AI Advisor ChromaDB Backend")
@@ -186,7 +202,7 @@ def tokenize(text: str) -> List[str]:
 def split_into_fine_provisions(cleaned_text: str) -> List[str]:
     """Split multi-section chunks into individual numbered Articles/Sections so single provisions don't get buried."""
     parts = re.split(r"(?=\b\d{1,3}[A-Z]?\.\s+[A-Z])", cleaned_text)
-    fine = [p.strip() for p in parts if len(p.strip()) >= 45]
+    fine = [p.strip() for p in parts if len(p.strip()) >= 40]
     return fine if len(fine) > 1 else [cleaned_text]
 
 
@@ -215,7 +231,6 @@ def build_bm25_index():
         chunk_index = meta.get("chunk_index", 0)
         provisions = meta.get("provisions", "")
 
-        # Index both the full chunk and each individual Article/Section inside it
         sub_units = split_into_fine_provisions(cleaned)
         entries = [(doc_id, cleaned, provisions)]
         if len(sub_units) > 1:
@@ -292,7 +307,7 @@ def expand_legal_query(query: str) -> str:
     return query
 
 
-def bm25_search(query: str, top_k: int = 45) -> Dict[str, dict]:
+def bm25_search(query: str, top_k: int = 60) -> Dict[str, dict]:
     q_tokens = tokenize(query)
     if not q_tokens or not corpus_docs:
         return {}
@@ -340,27 +355,26 @@ def bm25_search(query: str, top_k: int = 45) -> Dict[str, dict]:
     return results
 
 
-def hybrid_retrieve(query: str, top_k: int = 12) -> List[dict]:
+def hybrid_retrieve(query: str, top_k: int = 16) -> List[dict]:
     if not corpus_docs and collection is not None:
         build_bm25_index()
 
     q_lower = query.lower()
     expanded_query = expand_legal_query(query)
 
-    # Run dense vector search on both raw query and synonym-expanded query so neither dilutes the other
     vec_res_raw = collection.query(
         query_embeddings=[embed_query(query)],
-        n_results=35,
+        n_results=50,
         include=["documents", "metadatas", "distances"],
     )
     vec_res_exp = collection.query(
         query_embeddings=[embed_query(expanded_query)],
-        n_results=35,
+        n_results=50,
         include=["documents", "metadatas", "distances"],
     )
 
     candidates: Dict[str, dict] = {}
-    for vec_res, weight in [(vec_res_raw, 1.0), (vec_res_exp, 0.92)]:
+    for vec_res, weight in [(vec_res_raw, 1.0), (vec_res_exp, 0.95)]:
         ids = (vec_res.get("ids") or [[]])[0]
         docs = (vec_res.get("documents") or [[]])[0]
         metas = (vec_res.get("metadatas") or [[]])[0]
@@ -386,11 +400,10 @@ def hybrid_retrieve(query: str, top_k: int = 12) -> List[dict]:
                     "bm25_norm": 0.0,
                 }
 
-    # Run fine-grained BM25 search over individual Articles/Sections + full chunks
-    bm25_hits = bm25_search(expanded_query, top_k=50)
+    bm25_hits = bm25_search(expanded_query, top_k=65)
     for doc_id, hit in bm25_hits.items():
         parent_id = hit.get("parent_id", doc_id)
-        parent_vec = candidates[parent_id]["vec_score"] if parent_id in candidates else 0.38
+        parent_vec = candidates[parent_id]["vec_score"] if parent_id in candidates else 0.40
         if doc_id in candidates:
             candidates[doc_id]["bm25_norm"] = hit["bm25_norm"]
         else:
@@ -407,14 +420,12 @@ def hybrid_retrieve(query: str, top_k: int = 12) -> List[dict]:
 
     ranked = []
     for item in candidates.values():
-        combined = 0.50 * item["vec_score"] + 0.50 * item["bm25_norm"]
+        combined = 0.48 * item["vec_score"] + 0.52 * item["bm25_norm"]
         lower = item["cleaned"].lower()
 
-        # Slightly prefer focused single-provision units when BM25 matched strongly
-        if "__sub_" in item["id"] and item["bm25_norm"] > 0.45:
-            combined += 0.08
+        if "__sub_" in item["id"] and item["bm25_norm"] > 0.35:
+            combined += 0.10
 
-        # Demote Preamble/Objectives Resolution unless explicitly asked
         if (
             "preamble" not in q_lower
             and "objectives resolution" not in q_lower
@@ -427,7 +438,6 @@ def hybrid_retrieve(query: str, top_k: int = 12) -> List[dict]:
 
     ranked.sort(key=lambda x: x["final_score"], reverse=True)
 
-    # Deduplicate near-identical text while guaranteeing strong representation from BOTH books
     selected: List[dict] = []
     seen_texts = set()
     books_seen = []
@@ -438,18 +448,18 @@ def hybrid_retrieve(query: str, top_k: int = 12) -> List[dict]:
     for book_name in books_seen[:2]:
         added_for_book = 0
         for item in ranked:
-            sig = item["cleaned"][:140]
+            sig = item["cleaned"][:120]
             if item["book_title"] == book_name and sig not in seen_texts:
                 selected.append(item)
                 seen_texts.add(sig)
                 added_for_book += 1
-                if added_for_book >= 2:
+                if added_for_book >= 5:
                     break
 
     for item in ranked:
         if len(selected) >= top_k:
             break
-        sig = item["cleaned"][:140]
+        sig = item["cleaned"][:120]
         if sig not in seen_texts:
             selected.append(item)
             seen_texts.add(sig)
@@ -474,7 +484,7 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
         return None
 
     detailed = is_detailed_query(query)
-    max_tokens = 700 if detailed else 450
+    max_tokens = 750 if detailed else 480
 
     context_blocks = []
     for idx, p in enumerate(passages, start=1):
@@ -486,18 +496,20 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
 
     scope_rule = (
         "STRICT GROUNDING & OUT-OF-SCOPE RULE: Your corpus ONLY contains the Constitution of Pakistan (1973) and "
-        "the Code of Criminal Procedure (CrPC 1898). Read ALL provided excerpts carefully. If ANY excerpt contains "
-        "an Article or Section that answers or governs the user's question (directly or by legal principle), you MUST "
-        "answer clearly using that Article or Section. "
-        "Output ONLY the exact token OUT_OF_SCOPE if and only if NONE of the provided excerpts contain any relevant "
-        "rule, right, or procedure for the user's question (for example, specific PPC criminal punishments/definitions "
-        "or unrelated civil, family, property transfer, or tax statutes)."
+        "the Code of Criminal Procedure (CrPC 1898). Carefully inspect ALL provided excerpts. Whenever ANY excerpt "
+        "contains an Article or Section that relates to the user's question (including fundamental rights, freedom "
+        "of movement, emergency/proclamation provisions, reasonable restrictions, religious instruction/institutions, "
+        "arrest/search/bail/FIR/procedure, or constitutional principles), you MUST answer clearly and accurately "
+        "using ONLY those excerpts without hallucinating facts outside them. "
+        "Output ONLY the exact token OUT_OF_SCOPE only when NONE of the provided excerpts are relevant to the question "
+        "(such as specific PPC criminal offence definitions/punishments or unrelated statutes like family, labour, "
+        "tax, or corporate law not present in the excerpts)."
     )
 
     citation_rule = (
-        "BOLD ONLY RULE: Do NOT use parenthetical citations like '(Article 14 of the Constitution of Pakistan)'. "
+        "BOLD ONLY RULE: Do NOT use parenthetical citations like '(Article 15 of the Constitution of Pakistan)'. "
         "Make every Article or Section and its book/statute **bold** directly in the text—for example, "
-        "**Article 14 of the Constitution of Pakistan** or **Section 48 of the Code of Criminal Procedure (CrPC)**. "
+        "**Article 15 of the Constitution of Pakistan** or **Section 48 of the Code of Criminal Procedure (CrPC)**. "
         "NEVER refer to a chunk/part number as an Article or Section, and NEVER append sub-clause numbers like 'Article 14(2)'."
     )
 
@@ -593,7 +605,7 @@ def chat_endpoint(payload: ChatRequest):
         raise HTTPException(status_code=503, detail="Backend services are starting up.")
 
     try:
-        top_passages = hybrid_retrieve(query, top_k=12)
+        top_passages = hybrid_retrieve(query, top_k=16)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"ChromaDB query failed: {exc}")
 
