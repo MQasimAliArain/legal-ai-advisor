@@ -239,25 +239,27 @@ export default function Sidebar({
       )}
 
       <aside 
-        className={`border-r flex flex-col justify-between h-screen p-4 shrink-0 transition-all duration-300 z-20 ${
-          isOpen ? 'w-72' : 'w-20'
+        className={`border-r flex flex-col justify-between h-dvh p-4 shrink-0 transition-all duration-300 fixed inset-y-0 left-0 z-40 md:static md:translate-x-0 ${
+          isOpen
+            ? 'translate-x-0 w-72 max-w-[82vw]'
+            : '-translate-x-full w-72 md:translate-x-0 md:w-20'
         } ${
           isDark 
             ? 'bg-slate-900 border-slate-800 text-slate-200' 
             : 'bg-slate-50 border-slate-200 text-slate-800'
         }`}
       >
-        <div>
+        <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
           {/* Brand & Toggle Button */}
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-6 shrink-0">
             {isOpen ? (
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
                   <Gavel className="w-5 h-5" />
                 </div>
-                <div>
-                  <h1 className={`text-lg font-bold tracking-wide ${isDark ? 'text-white' : 'text-slate-900'}`}>{t('appTitle')}</h1>
-                  <p className="text-[10px] text-emerald-500 font-medium">{t('pkEdition')}</p>
+                <div className="min-w-0">
+                  <h1 className={`text-lg font-bold tracking-wide truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{t('appTitle')}</h1>
+                  <p className="text-[10px] text-emerald-500 font-medium truncate">{t('pkEdition')}</p>
                 </div>
               </div>
             ) : (
@@ -268,7 +270,7 @@ export default function Sidebar({
 
             <button
               onClick={() => setIsOpen(!isOpen)}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+              className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
                 isDark 
                   ? 'hover:bg-slate-800 text-slate-400 hover:text-white' 
                   : 'hover:bg-slate-200 text-slate-600 hover:text-slate-900'
@@ -282,7 +284,7 @@ export default function Sidebar({
           {/* New Chat Button */}
           <button
             onClick={onNewChat}
-            className={`w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-2.5 rounded-xl transition-all cursor-pointer mb-6 ${
+            className={`w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-2.5 rounded-xl transition-all cursor-pointer mb-6 shrink-0 ${
               !isOpen ? 'px-2' : 'px-4'
             }`}
           >
@@ -291,7 +293,7 @@ export default function Sidebar({
           </button>
 
           {/* Chat List Container */}
-          <div className="space-y-3 mb-4 max-h-[calc(100vh-280px)] overflow-y-auto">
+          <div className="space-y-3 mb-4 flex-1 min-h-0 overflow-y-auto">
             {/* Pinned Section */}
             {pinnedChats.length > 0 && (
               <div className="space-y-1">
@@ -320,7 +322,7 @@ export default function Sidebar({
         </div>
 
         {/* Footer Actions: Settings & Profile */}
-        <div className={`pt-4 border-t space-y-3 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
+        <div className={`pt-4 border-t space-y-3 shrink-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
           {/* Settings option - accessible only when user is logged in */}
           {user && (
             <button 

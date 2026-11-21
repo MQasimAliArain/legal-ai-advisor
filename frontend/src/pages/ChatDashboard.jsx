@@ -1,7 +1,7 @@
 // src/pages/ChatDashboard.jsx
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Send } from 'lucide-react';
+import { AlertTriangle, Menu, Send } from 'lucide-react';
 import Sidebar from '../components/layout/Sidebar';
 import BookAnswerNote from '../components/chat/BookAnswerNote';
 import { useLanguage } from '../context/LanguageContext';
@@ -44,11 +44,14 @@ export default function ChatDashboard({ user, onLogout }) {
   const [messages, setMessages] = useState([]);
   const [recentChats, setRecentChats] = useState([]);
   const [currentChatId, setCurrentChatId] = useState(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  );
   const [isLoading, setIsLoading] = useState(false);
   const [activeUser, setActiveUser] = useState(user || null);
 
   const chatContainerRef = useRef(null);
+  const textareaRef = useRef(null);
   const shouldAutoScrollRef = useRef(true);
   const hydratedStorageKeyRef = useRef(null);
 
@@ -120,6 +123,17 @@ export default function ChatDashboard({ user, onLogout }) {
     if (!storageKey || hydratedStorageKeyRef.current !== storageKey) return;
     writeStoredAccountChats(storageKey, recentChats);
   }, [storageKey, recentChats]);
+
+  const resizeTextarea = () => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 144)}px`;
+  };
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [input]);
 
   const scrollToBottom = (behavior = 'smooth') => {
     const el = chatContainerRef.current;
@@ -222,6 +236,9 @@ export default function ChatDashboard({ user, onLogout }) {
     const newMessages = [...messages, { role: 'user', content: userQuery }];
     setMessages(newMessages);
     setInput('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
     setIsLoading(true);
 
     let activeId = currentChatId;
@@ -316,16 +333,29 @@ export default function ChatDashboard({ user, onLogout }) {
     });
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend(e);
+    }
+  };
+
   const handleNewChat = () => {
     shouldAutoScrollRef.current = true;
     setMessages([]);
     setCurrentChatId(null);
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
   };
 
   const handleSelectChat = (chat) => {
     shouldAutoScrollRef.current = true;
     setCurrentChatId(chat.id);
     setMessages(chat.messages || []);
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
     requestAnimationFrame(() => scrollToBottom('auto'));
   };
 
@@ -375,9 +405,18 @@ export default function ChatDashboard({ user, onLogout }) {
   };
 
   return (
-    <div className={`flex h-screen overflow-hidden transition-colors duration-300 ${
+    <div className={`relative flex h-dvh w-full max-w-full overflow-hidden transition-colors duration-300 ${
       isDark ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-900'
     } ${lang === 'ur' ? 'font-sans' : ''}`}>
+
+      {/* Mobile Backdrop */}
+      {isSidebarOpen && (
+        <div
+          onClick={() => setIsSidebarOpen(false)}
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-[1px] z-30 md:hidden"
+          aria-hidden="true"
+        />
+      )}
 
       {/* Sidebar Component */}
       <Sidebar
@@ -394,25 +433,39 @@ export default function ChatDashboard({ user, onLogout }) {
       />
 
       {/* Main Chat Content */}
-      <div className="flex-1 flex flex-col justify-between h-screen min-w-0 overflow-hidden">
+      <div className="flex-1 flex flex-col justify-between h-dvh w-full min-w-0 overflow-hidden">
 
         {/* Header */}
-        <header className={`p-4 border-b flex justify-between items-center px-6 transition-colors ${
+        <header className={`py-3.5 px-4 sm:px-6 border-b flex justify-between items-center gap-3 shrink-0 min-w-0 transition-colors ${
           isDark
             ? 'bg-slate-800/80 border-slate-700/80'
             : 'bg-white/80 border-slate-200 shadow-sm'
         }`}>
-          <h1 className={`text-lg font-bold ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`}>
-            {t('appTitle')}
-          </h1>
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen((prev) => !prev)}
+              className={`md:hidden p-2 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                isDark
+                  ? 'hover:bg-slate-700/80 text-slate-200'
+                  : 'hover:bg-slate-200 text-slate-700'
+              }`}
+              aria-label="Toggle navigation menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <h1 className={`text-base sm:text-lg font-bold truncate ${isDark ? 'text-emerald-400' : 'text-emerald-600'}`}>
+              {t('appTitle')}
+            </h1>
+          </div>
 
           {!effectiveUser && (
             <button
               onClick={() => navigate('/login')}
-              className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 text-amber-500 px-3 py-1.5 rounded-lg text-xs hover:bg-amber-500/20 transition-all cursor-pointer"
+              className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 text-amber-500 px-3 py-1.5 rounded-lg text-xs hover:bg-amber-500/20 transition-all cursor-pointer shrink-0"
             >
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-              <span>{t('notLoggedInWarning')}</span>
+              <span className="truncate max-w-[140px] sm:max-w-none">{t('notLoggedInWarning')}</span>
             </button>
           )}
         </header>
@@ -422,11 +475,11 @@ export default function ChatDashboard({ user, onLogout }) {
           ref={chatContainerRef}
           onScroll={handleChatScroll}
           style={{ scrollbarGutter: 'stable' }}
-          className="flex-1 w-full px-4 py-6 sm:px-6 overflow-y-scroll scroll-smooth"
+          className="flex-1 w-full min-w-0 px-3.5 py-5 sm:px-6 sm:py-6 overflow-y-auto overflow-x-hidden scroll-smooth"
         >
-          <div className="max-w-4xl w-full mx-auto flex flex-col gap-6">
+          <div className="max-w-4xl w-full min-w-0 mx-auto flex flex-col gap-5 sm:gap-6">
             {messages.length === 0 ? (
-              <div className={`text-center mt-20 text-sm ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              <div className={`text-center mt-16 sm:mt-20 px-4 text-sm ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
                 {t('typeQueryPrompt')}
               </div>
             ) : (
@@ -434,7 +487,7 @@ export default function ChatDashboard({ user, onLogout }) {
                 m.role === 'user' ? (
                   <div
                     key={idx}
-                    className={`self-end p-4 rounded-xl max-w-2xl w-fit text-sm leading-relaxed whitespace-pre-line ${
+                    className={`self-end px-4 py-3 sm:p-4 rounded-xl max-w-[88%] sm:max-w-2xl w-fit text-sm leading-relaxed whitespace-pre-line break-words ${
                       isDark
                         ? 'bg-emerald-500/10 text-emerald-200 border border-emerald-500/20'
                         : 'bg-emerald-50 text-emerald-900 border border-emerald-300 shadow-sm'
@@ -445,7 +498,7 @@ export default function ChatDashboard({ user, onLogout }) {
                 ) : (
                   <div
                     key={idx}
-                    className={`w-full py-1 text-sm sm:text-[15px] leading-7 whitespace-pre-line text-left ${
+                    className={`w-full min-w-0 py-1 text-sm sm:text-[15px] leading-7 whitespace-pre-line break-words text-left ${
                       isDark ? 'text-slate-100' : 'text-slate-800'
                     }`}
                   >
@@ -466,18 +519,20 @@ export default function ChatDashboard({ user, onLogout }) {
         </main>
 
         {/* Chat Input Bar */}
-        <footer className={`p-4 border-t transition-colors ${
+        <footer className={`p-3 sm:p-4 border-t shrink-0 min-w-0 transition-colors ${
           isDark
             ? 'bg-slate-800/80 border-slate-700/80'
             : 'bg-white/80 border-slate-200 shadow-sm'
         }`}>
-          <form onSubmit={handleSend} className="max-w-4xl w-full mx-auto flex gap-2">
-            <input
-              type="text"
+          <form onSubmit={handleSend} className="max-w-4xl w-full min-w-0 mx-auto flex items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              rows={1}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder={effectiveUser ? t('askQuestion') : t('loginRequired')}
-              className={`flex-1 rounded-lg px-4 py-2.5 text-sm border focus:outline-none focus:border-emerald-500 transition-colors ${
+              className={`flex-1 min-w-0 w-full rounded-lg px-3.5 sm:px-4 py-2.5 text-sm border focus:outline-none focus:border-emerald-500 transition-colors resize-none leading-5 max-h-36 overflow-y-auto break-words ${
                 isDark
                   ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500'
                   : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400'
@@ -487,9 +542,10 @@ export default function ChatDashboard({ user, onLogout }) {
             <button
               type="submit"
               disabled={isLoading}
-              className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold px-5 py-2.5 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer text-sm disabled:opacity-50"
+              className="bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold px-3.5 sm:px-5 py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5 cursor-pointer text-sm disabled:opacity-50 shrink-0"
             >
-              <Send className="w-4 h-4" /> {t('send')}
+              <Send className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">{t('send')}</span>
             </button>
           </form>
         </footer>
