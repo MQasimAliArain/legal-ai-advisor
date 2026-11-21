@@ -40,10 +40,8 @@ function splitIntoLegalChunks(rawText) {
     .replace(/\s+/g, " ")
     .trim();
 
-  // Split right before numbered provisions like " 1. ", " 2. ", " 4. ", " 154. " or " Article 10 " / " Section 164 "
-  const sections = cleanText.split(
-    /(?=\s\d{1,3}[A-Z]?\.\s+[A-Z]|\s(?:Article|Section)\s+\d{1,3}[A-Z]?\b)/i
-  );
+  // Split right before numbered provisions like " 1. ", " 2. ", " 4. ", " 154. "
+  const sections = cleanText.split(/(?=\s\d{1,3}[A-Z]?\.\s+[A-Z])/);
   const chunks = [];
   let buffer = "";
 
@@ -84,10 +82,7 @@ function splitIntoLegalChunks(rawText) {
 }
 
 function detectProvisionNumbers(text) {
-  const matches = [
-    ...[...text.matchAll(/\b(\d{1,3}[A-Z]?)\.\s+[A-Z]/g)].map((m) => m[1]),
-    ...[...text.matchAll(/\b(?:Article|Section)\s+(\d{1,3}[A-Z]?)\b/gi)].map((m) => m[1]),
-  ];
+  const matches = [...text.matchAll(/\b(\d{1,3}[A-Z]?)\.\s+[A-Z]/g)].map((m) => m[1]);
   const unique = [...new Set(matches)];
   return unique.length > 0 ? unique.slice(0, 6).join(", ") : "";
 }
