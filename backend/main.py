@@ -154,22 +154,13 @@ def build_bm25_index():
 def startup_event():
     global model, collection
     model = SentenceTransformer(EMBED_MODEL_NAME)
-
-    chroma_host = os.getenv("CHROMA_HOST", CHROMA_HOST)
-    chroma_port = int(os.getenv("CHROMA_PORT", str(CHROMA_PORT)))
-    use_ssl = os.getenv("CHROMA_SSL", "true" if chroma_port == 443 else "false").lower() == "true"
-
-    client = chromadb.HttpClient(host=chroma_host, port=chroma_port, ssl=use_ssl)
+    client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
     try:
         collection = client.get_collection(name=COLLECTION_NAME)
-    except Exception:
-        try:
-            collection = client.get_or_create_collection(name=COLLECTION_NAME)
-        except KeyError:
-            collection = None
-
+    except Exception as e:
+        print(f"Collection load error: {e}")
+        collection = None
     build_bm25_index()
-
 def embed_query(text: str) -> List[float]:
     if model is None:
         raise RuntimeError("Embedding model is not initialized.")
