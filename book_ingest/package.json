@@ -1,0 +1,11 @@
+{
+  "name": "legal-book-ingest",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2",
+    "@supabase/supabase-js": "^2.45.0",
+    "chromadb": "^3.5.0",
+    "pdfjs-dist": "^6.5.438"
+  }
+}
