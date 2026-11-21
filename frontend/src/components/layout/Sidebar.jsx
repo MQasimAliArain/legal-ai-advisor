@@ -178,7 +178,9 @@ export default function Sidebar({
         </div>
       ) : (
         <div 
-          className={`flex items-center justify-between w-full p-2 rounded-lg transition-colors text-xs cursor-pointer ${
+          className={`flex items-center justify-between w-full rounded-lg transition-colors text-xs cursor-pointer ${
+            isOpen ? 'px-2 py-1.5' : 'px-1 py-1.5 justify-center'
+          } ${
             isDark 
               ? 'text-slate-300 hover:bg-slate-800/80' 
               : 'text-slate-700 hover:bg-slate-200/70'
@@ -186,10 +188,12 @@ export default function Sidebar({
         >
           <button
             onClick={() => onSelectChat(chat)}
-            className="flex items-center gap-2.5 truncate flex-1 text-left cursor-pointer"
+            className={`flex items-center truncate cursor-pointer ${
+              isOpen ? 'gap-2.5 flex-1 text-left' : 'justify-center w-8 h-8'
+            }`}
             title={chat.title}
           >
-            <MessageSquare className={`w-3.5 h-3.5 shrink-0 ${
+            <MessageSquare className={`w-4 h-4 shrink-0 ${
               isDark ? 'text-slate-400 group-hover:text-emerald-400' : 'text-slate-500 group-hover:text-emerald-600'
             }`} />
             {isOpen && (
@@ -239,10 +243,10 @@ export default function Sidebar({
       )}
 
       <aside 
-        className={`border-r flex flex-col justify-between h-dvh p-4 shrink-0 transition-all duration-300 fixed inset-y-0 left-0 z-40 md:static md:translate-x-0 ${
+        className={`border-r flex flex-col justify-between h-dvh shrink-0 transition-all duration-200 fixed inset-y-0 left-0 z-40 md:static md:translate-x-0 ${
           isOpen
-            ? 'translate-x-0 w-72 max-w-[82vw]'
-            : '-translate-x-full w-72 md:translate-x-0 md:w-20'
+            ? 'translate-x-0 w-64 max-w-[82vw] p-3.5'
+            : '-translate-x-full w-64 md:translate-x-0 md:w-[68px] py-3.5 px-2'
         } ${
           isDark 
             ? 'bg-slate-900 border-slate-800 text-slate-200' 
@@ -251,52 +255,66 @@ export default function Sidebar({
       >
         <div className="min-h-0 flex-1 flex flex-col overflow-hidden">
           {/* Brand & Toggle Button */}
-          <div className="flex items-center justify-between mb-6 shrink-0">
-            {isOpen ? (
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg shrink-0">
-                  <Gavel className="w-5 h-5" />
+          {isOpen ? (
+            <div className="flex items-center justify-between gap-2 mb-4 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg flex items-center justify-center shrink-0">
+                  <Gavel className="w-4 h-4" />
                 </div>
                 <div className="min-w-0">
-                  <h1 className={`text-lg font-bold tracking-wide truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{t('appTitle')}</h1>
-                  <p className="text-[10px] text-emerald-500 font-medium truncate">{t('pkEdition')}</p>
+                  <h1 className={`text-base font-bold leading-tight truncate ${isDark ? 'text-white' : 'text-slate-900'}`}>{t('appTitle')}</h1>
+                  <p className="text-[10px] text-emerald-500 font-medium leading-tight truncate">{t('pkEdition')}</p>
                 </div>
               </div>
-            ) : (
-              <div className="p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg mx-auto">
-                <Gavel className="w-5 h-5" />
-              </div>
-            )}
 
-            <button
-              onClick={() => setIsOpen(!isOpen)}
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
-                isDark 
-                  ? 'hover:bg-slate-800 text-slate-400 hover:text-white' 
-                  : 'hover:bg-slate-200 text-slate-600 hover:text-slate-900'
-              }`}
-              title={isOpen ? "Collapse Sidebar" : "Expand Sidebar"}
-            >
-              {isOpen ? <PanelLeftClose className="w-5 h-5" /> : <PanelLeft className="w-5 h-5" />}
-            </button>
-          </div>
+              <button
+                onClick={() => setIsOpen(!isOpen)}
+                className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                  isDark 
+                    ? 'hover:bg-slate-800 text-slate-400 hover:text-white' 
+                    : 'hover:bg-slate-200 text-slate-600 hover:text-slate-900'
+                }`}
+                title="Collapse Sidebar"
+              >
+                <PanelLeftClose className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-2 mb-4 shrink-0">
+              <div className="w-9 h-9 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-lg flex items-center justify-center">
+                <Gavel className="w-4 h-4" />
+              </div>
+              <button
+                onClick={() => setIsOpen(!isOpen)}
+                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
+                  isDark 
+                    ? 'hover:bg-slate-800 text-slate-400 hover:text-white' 
+                    : 'hover:bg-slate-200 text-slate-600 hover:text-slate-900'
+                }`}
+                title="Expand Sidebar"
+              >
+                <PanelLeft className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           {/* New Chat Button */}
           <button
             onClick={onNewChat}
-            className={`w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold py-2.5 rounded-xl transition-all cursor-pointer mb-6 shrink-0 ${
-              !isOpen ? 'px-2' : 'px-4'
+            title={!isOpen ? t('newChat') : undefined}
+            className={`flex items-center justify-center bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-semibold transition-all cursor-pointer mb-4 shrink-0 ${
+              isOpen ? 'w-full gap-2 py-2 px-3 rounded-lg text-xs' : 'w-9 h-9 mx-auto rounded-lg'
             }`}
           >
-            <Plus className="w-5 h-5 shrink-0" />
-            {isOpen && <span className="text-sm">{t('newChat')}</span>}
+            <Plus className="w-4 h-4 shrink-0 stroke-[2.5]" />
+            {isOpen && <span>{t('newChat')}</span>}
           </button>
 
           {/* Chat List Container */}
-          <div className="space-y-3 mb-4 flex-1 min-h-0 overflow-y-auto">
+          <div className="space-y-2.5 mb-3 flex-1 min-h-0 overflow-y-auto">
             {/* Pinned Section */}
             {pinnedChats.length > 0 && (
-              <div className="space-y-1">
+              <div className="space-y-0.5">
                 {isOpen && (
                   <p className="text-[10px] font-semibold text-emerald-500 px-2 py-1 uppercase tracking-wider flex items-center gap-1">
                     <Pin className="w-3 h-3 fill-emerald-500" />
@@ -308,7 +326,7 @@ export default function Sidebar({
             )}
 
             {/* Recents Section */}
-            <div className="space-y-1">
+            <div className="space-y-0.5">
               {isOpen && recentChats.length > 0 && (
                 <p className={`text-[10px] font-semibold px-2 py-1 uppercase tracking-wider ${
                   isDark ? 'text-slate-500' : 'text-slate-400'
@@ -322,12 +340,15 @@ export default function Sidebar({
         </div>
 
         {/* Footer Actions: Settings & Profile */}
-        <div className={`pt-4 pb-12 md:pb-2 border-t space-y-3 shrink-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
+        <div className={`pt-2.5 pb-12 md:pb-1 border-t space-y-1.5 shrink-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
           {/* Settings option - accessible only when user is logged in */}
           {user && (
             <button 
               onClick={handleOpenSettings}
-              className={`w-full flex items-center gap-3 px-2 py-2 transition rounded-lg text-xs font-medium cursor-pointer ${
+              title={!isOpen ? t('settings') : undefined}
+              className={`flex items-center transition rounded-lg text-xs font-medium cursor-pointer ${
+                isOpen ? 'w-full gap-2.5 px-2 py-1.5' : 'w-9 h-9 mx-auto justify-center'
+              } ${
                 isDark 
                   ? 'text-slate-400 hover:text-white hover:bg-slate-800/60' 
                   : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
@@ -340,48 +361,65 @@ export default function Sidebar({
 
           {/* Profile / Login Block */}
           {user ? (
-            <div className={`flex items-center justify-between p-2 rounded-lg border ${
-              isDark ? 'bg-slate-950 border-slate-800' : 'bg-white border-slate-200'
-            }`}>
-              {(() => {
-                const displayName = user.user_metadata?.username || user.name || user.email?.split('@')[0] || 'User';
-                return (
-                  <div className="flex items-center gap-2 overflow-hidden">
-                    <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center font-bold text-emerald-400 text-xs shrink-0">
-                      {displayName[0].toUpperCase()}
-                    </div>
-                    {isOpen && (
-                      <div className="truncate">
-                        <p className={`text-xs font-semibold truncate ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
+            isOpen ? (
+              <div className={`flex items-center justify-between px-2 py-1.5 rounded-lg border ${
+                isDark ? 'bg-slate-950/80 border-slate-800' : 'bg-white border-slate-200'
+              }`}>
+                {(() => {
+                  const displayName = user.user_metadata?.username || user.name || user.email?.split('@')[0] || 'User';
+                  return (
+                    <div className="flex items-center gap-2 overflow-hidden min-w-0">
+                      <div className="w-7 h-7 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center font-bold text-emerald-400 text-xs shrink-0">
+                        {displayName[0].toUpperCase()}
+                      </div>
+                      <div className="truncate min-w-0">
+                        <p className={`text-xs font-semibold leading-tight truncate ${isDark ? 'text-slate-200' : 'text-slate-800'}`}>
                           {displayName}
                         </p>
-                        <p className={`text-[10px] truncate ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                        <p className={`text-[10px] leading-tight truncate ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
                           {user.email}
                         </p>
                       </div>
-                    )}
-                  </div>
-                );
-              })()}
+                    </div>
+                  );
+                })()}
 
-              {isOpen && (
                 <button
                   onClick={() => setShowLogoutModal(true)}
-                  className={`p-1 rounded transition-colors cursor-pointer ml-1 ${
+                  className={`p-1 rounded transition-colors cursor-pointer ml-1 shrink-0 ${
                     isDark 
                       ? 'hover:bg-slate-800 text-slate-400 hover:text-red-400' 
                       : 'hover:bg-slate-100 text-slate-500 hover:text-red-500'
                   }`}
                   title={t('logout')}
                 >
-                  <LogOut className="w-4 h-4" />
+                  <LogOut className="w-3.5 h-3.5" />
                 </button>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="flex justify-center pt-0.5">
+                {(() => {
+                  const displayName = user.user_metadata?.username || user.name || user.email?.split('@')[0] || 'User';
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => setShowLogoutModal(true)}
+                      title={`${displayName} (${t('logout')})`}
+                      className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center font-bold text-emerald-400 text-xs cursor-pointer hover:bg-emerald-500/30 transition-colors"
+                    >
+                      {displayName[0].toUpperCase()}
+                    </button>
+                  );
+                })()}
+              </div>
+            )
           ) : (
             <button
               onClick={() => navigate('/login')}
-              className="w-full flex items-center gap-2 p-2 bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20 rounded-lg text-xs font-medium cursor-pointer transition-colors"
+              title={!isOpen ? t('login') : undefined}
+              className={`flex items-center justify-center bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 hover:bg-emerald-500/20 rounded-lg text-xs font-medium cursor-pointer transition-colors ${
+                isOpen ? 'w-full gap-2 py-1.5 px-2' : 'w-9 h-9 mx-auto'
+              }`}
             >
               <User className="w-4 h-4 shrink-0" />
               {isOpen && <span>{t('login')}</span>}
