@@ -96,6 +96,50 @@ def normalize_reply_formatting(text: str) -> str:
     return cleaned.strip()
 
 
+def extract_reference_from_reply(reply_text: str, passages: List[dict]) -> Optional[str]:
+    """Match the primary Article/Section cited in the generated reply to its book title."""
+    bold_matches = re.findall(r"\*\*((?:Article|Section)\s+\d+[A-Z]?[^*\n]*?)\*\*", reply_text or "")
+    for raw_match in bold_matches:
+        prov_match = re.search(r"\b(Article|Section)\s+(\d+[A-Z]?)\b", raw_match, flags=re.IGNORECASE)
+        if not prov_match:
+            continue
+        kind = prov_match.group(1).capitalize()
+        num = prov_match.group(2).upper()
+        match_lower = raw_match.lower()
+
+        if "criminal" in match_lower or "crpc" in match_lower or kind == "Section":
+            matched_book = next(
+                (
+                    str(p.get("book_title")).strip()
+                    for p in passages
+                    if p.get("book_title")
+                    and ("criminal" in str(p.get("book_title")).lower() or "crpc" in str(p.get("book_title")).lower())
+                ),
+                "Code of Criminal Procedure, 1898",
+            )
+            return f"{matched_book} - Section {num}"
+
+        matched_book = next(
+            (
+                str(p.get("book_title")).strip()
+                for p in passages
+                if p.get("book_title") and "constitution" in str(p.get("book_title")).lower()
+            ),
+            "Constitution of Islamic Republic of Pakistan, 1973",
+        )
+        return f"{matched_book} - Article {num}"
+
+    for p in passages:
+        book = str(p.get("book_title") or "Legal Reference").strip()
+        prov = str(p.get("provisions") or "").strip()
+        if prov:
+            first_prov = prov.split(",")[0].strip()
+            label = "Section" if "criminal" in book.lower() or "crpc" in book.lower() else "Article"
+            return f"{book} - {label} {first_prov}"
+
+    return str(passages[0].get("book_title") or "Legal Reference").strip() if passages else None
+
+
 def tokenize(text: str) -> List[str]:
     tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
     return [t for t in tokens if len(t) >= 2 and t not in STOP_WORDS]
@@ -285,6 +329,30 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
             "stolen property",
         ]
     )
+    is_double_jeopardy_query = any(
+        k in q_lower
+        for k in [
+            "prosecuted twice",
+            "punished twice",
+            "same offence",
+            "twice for",
+            "more than once",
+            "separate firs",
+            "two firs",
+            "double jeopardy",
+        ]
+    )
+    is_speech_query = any(
+        k in q_lower
+        for k in [
+            "freedom of speech",
+            "criticizes the government",
+            "criticize the government",
+            "peacefully criticizes",
+            "reasonable restrictions",
+            "expression",
+        ]
+    )
 
     if is_arrest_rights_query:
         retrieval_query = (
@@ -306,6 +374,14 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
     elif is_torture_query:
         retrieval_query = (
             f"{query} dignity of man torture extracting evidence confession stolen property"
+        )
+    elif is_double_jeopardy_query:
+        retrieval_query = (
+            f"{query} prosecuted or punished for the same offence more than once acquitted convicted"
+        )
+    elif is_speech_query:
+        retrieval_query = (
+            f"{query} freedom of speech and expression reasonable restrictions prescribed by law"
         )
     elif "equality" in q_lower or "equal protection" in q_lower or "identical treatment" in q_lower:
         retrieval_query = f"{query} equality of citizens equal protection of law"
@@ -381,6 +457,16 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
         if is_torture_query and "constitution" in book_lower and ("dignity" in lower or "torture" in lower):
             combined += 0.35
 
+        if is_double_jeopardy_query and (
+            "same offence" in lower or "more than once" in lower or "acquitted" in lower or "convicted" in lower
+        ):
+            combined += 0.35
+
+        if is_speech_query and "constitution" in book_lower and (
+            "freedom of speech" in lower or "expression" in lower
+        ):
+            combined += 0.35
+
         if ("equality" in q_lower or "equal protection" in q_lower) and "equal protection of law" in lower:
             combined += 0.35
 
@@ -451,12 +537,12 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
     scope_rule = (
         "STRICT GROUNDING & OUT-OF-SCOPE RULE: Your corpus ONLY contains the Constitution of Pakistan (1973) and "
         "the Code of Criminal Procedure (CrPC 1898). Whenever the provided excerpts contain relevant Articles "
-        "or Sections (including fundamental rights, arrest/search procedures, safe custody of articles, search of "
-        "women, torture/dignity, or language/culture), you MUST answer using those excerpts—do NOT treat a "
-        "question as out of scope just because it mentions property, police searches, citizens, or offences. "
+        "or Sections (including fundamental rights, freedom of speech, protection against double prosecution or "
+        "punishment for the same offence, arrest/search procedures, safe custody of articles, search of women, "
+        "torture/dignity, or language/culture), you MUST answer clearly using those excerpts. "
         "Only output the exact token OUT_OF_SCOPE when the provided excerpts clearly do not address the question "
-        "at all (for example, specific PPC criminal definitions/punishments or unrelated statutes like family/tax/corporate "
-        "law not present in the excerpts)."
+        "at all (for example, specific PPC criminal definitions/punishments or unrelated statutes like family, labour, "
+        "tax, or corporate law not present in the excerpts)."
     )
 
     citation_rule = (
@@ -568,18 +654,6 @@ def chat_endpoint(payload: ChatRequest):
             disclaimer=SHORT_DISCLAIMER,
         )
 
-    single_reference = None
-    for p in top_passages:
-        book = str(p.get("book_title") or "Legal Reference").strip()
-        prov = str(p.get("provisions") or "").strip()
-        if prov:
-            first_prov = prov.split(",")[0].strip()
-            label = "Section" if "criminal" in book.lower() or "crpc" in book.lower() else "Article"
-            single_reference = f"{book} - {label} {first_prov}"
-            break
-    if not single_reference and top_passages:
-        single_reference = str(top_passages[0].get("book_title") or "Legal Reference").strip()
-
     llm_reply = generate_with_llm(query, top_passages)
     if llm_reply and llm_reply.strip().upper() == "OUT_OF_SCOPE":
         return ChatResponse(
@@ -596,6 +670,8 @@ def chat_endpoint(payload: ChatRequest):
             reference=None,
             disclaimer=SHORT_DISCLAIMER,
         )
+
+    single_reference = extract_reference_from_reply(reply_text, top_passages)
 
     return ChatResponse(
         reply=reply_text,
