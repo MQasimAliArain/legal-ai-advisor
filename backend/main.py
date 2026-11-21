@@ -31,7 +31,7 @@ LLM_BASE_URL = (
 ).strip()
 LLM_MODEL = (os.getenv("LLM_MODEL") or "openai/gpt-oss-120b").strip()
 SHORT_DISCLAIMER = (
-    "Disclaimer: This is for General Guidance only not a Professional Legal advice."
+    "Disclaimer: For prototype informational purposes only; not formal legal advice."
 )
 
 OUT_OF_SCOPE_MSG = (
@@ -44,75 +44,7 @@ STOP_WORDS = {
     "or", "how", "when", "where", "why", "who", "can", "should", "does",
     "do", "are", "was", "were", "be", "been", "with", "from", "by", "under",
     "this", "that", "these", "those", "it", "its", "as", "at", "into",
-    "someone", "person", "they", "them", "their", "even", "only", "also",
-    "would", "could", "may", "might", "must", "shall", "any", "all", "during",
-}
-
-# Broad legal & constitutional synonym expansion so everyday wording matches statutory terms
-LEGAL_SYNONYMS = {
-    "movement": "freedom of movement enter and move freely throughout pakistan public interest",
-    "travel": "freedom of movement enter and move freely throughout pakistan",
-    "emergency": "proclamation of emergency fundamental rights suspended public interest",
-    "public": "public interest public order public safety reasonable restrictions",
-    "government": "state federal government provincial government law authority",
-    "restrict": "reasonable restrictions imposed by law subject to any reasonable restrictions",
-    "restriction": "reasonable restrictions imposed by law subject to any reasonable restrictions",
-    "apartment": "house place zenana apartment",
-    "house": "house place dwelling apartment",
-    "home": "house place dwelling apartment",
-    "woman": "woman female zenana modesty decency",
-    "female": "woman female zenana modesty decency",
-    "withdraw": "withdraw notice facility zenana",
-    "privacy": "privacy zenana apartment dignity home",
-    "search": "search searched searching articles found",
-    "body": "person body searched articles found",
-    "pocket": "articles found upon him searched",
-    "money": "articles found upon him safe custody",
-    "phone": "articles found upon him safe custody",
-    "clothes": "wearing apparel necessary",
-    "convicted": "convicted conviction bail arrested",
-    "arrest": "arrest arrested custody warrant",
-    "police": "police officer magistrate",
-    "bail": "bail bailable non-bailable bond",
-    "fir": "information cognizable offence officer in charge",
-    "confess": "confession witness against himself compelled accused offence",
-    "confession": "confession magistrate statement witness against himself compelled",
-    "force": "compelled torture force coercion accused witness against himself",
-    "forced": "compelled torture force coercion accused witness against himself",
-    "evidence": "evidence confession witness against himself torture",
-    "accused": "accused person charged offence witness against himself",
-    "charged": "charged offence accused person trial",
-    "offence": "offence punishable by law act omitted",
-    "punished": "punished punishment retrospective offence law greater penalty",
-    "punishment": "punishment retrospective offence greater penalty",
-    "retrospective": "retrospective punishment act punishable at the time offence greater penalty",
-    "retroactive": "retrospective punishment act punishable at the time offence greater penalty",
-    "past": "retrospective punishment act punishable at the time offence",
-    "ago": "retrospective punishment act punishable at the time offence",
-    "torture": "torture dignity extracting evidence",
-    "twice": "same offence more than once acquitted convicted",
-    "speech": "freedom of speech and expression restrictions",
-    "criticize": "freedom of speech and expression public order",
-    "language": "language script culture preserve promote",
-    "culture": "language script culture preserve promote",
-    "religion": "religion religious instruction ceremony worship profess practice",
-    "religious": "religion religious instruction ceremony worship profess practice",
-    "institution": "educational institution receiving aid",
-    "school": "educational institution receiving aid",
-    "property": "property acquire hold dispose",
-    "equality": "equality equal protection citizens",
-    "life": "life liberty security person",
-    "detention": "arrest detention safeguards twenty-four hours",
-    "lawyer": "legal practitioner counsel defence",
-    "judge": "magistrate court judge session",
-    "witness": "witness examination summons",
-    "warrant": "warrant arrest search summons",
-    "assembly": "freedom of assembly peaceful without arms",
-    "association": "freedom of association unions",
-    "trade": "freedom of trade business or profession",
-    "remand": "remand custody magistrate detention",
-    "trial": "trial court inquiry magistrate charge",
-    "appeal": "appeal court conviction sentence",
+    "someone", "person", "they", "them", "their",
 }
 
 app = FastAPI(title="Legal AI Advisor ChromaDB Backend")
@@ -149,6 +81,13 @@ def clean_text(raw: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def safe_int(val, default: int = 0) -> int:
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def normalize_reply_formatting(text: str) -> str:
     """Enforce clean formatting: bold headings and provisions only, no #, >, ---, sub-clause numbers, or trailing citation lists."""
     cleaned = re.sub(r"(?m)^\s*#{1,6}\s*(.+?)\s*$", r"**\1**", text)
@@ -156,6 +95,7 @@ def normalize_reply_formatting(text: str) -> str:
     cleaned = re.sub(r"(?m)^\s*[-*_]{3,}\s*$", "", cleaned)
     cleaned = re.sub(r"\b(Article|Section)\s+(\d+[A-Z]?)\(\d+\)", r"\1 \2", cleaned)
     cleaned = re.sub(r"(?<!\*)\*((?:Article|Section)\s+[^*\n]+?)\*(?!\*)", r"**\1**", cleaned)
+    # Turn parenthetical citations like "(Article 19 of the Constitution of Pakistan)" into bold inline text
     cleaned = re.sub(r"\(\s*(\*\*)?((?:Article|Section)\s+[^()\n]+?)(\*\*)?\s*\)", r"**\2**", cleaned)
     cleaned = re.sub(r"\*\*+", "**", cleaned)
     cleaned = re.sub(r"\n+\*\*Citations?\*\*[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
@@ -163,64 +103,13 @@ def normalize_reply_formatting(text: str) -> str:
     return cleaned.strip()
 
 
-def extract_reference_from_reply(reply_text: str, passages: List[dict]) -> Optional[str]:
-    """Match the primary Article/Section cited in the generated reply to its book title."""
-    bold_matches = re.findall(r"\*\*((?:Article|Section)\s+\d+[A-Z]?[^*\n]*?)\*\*", reply_text or "")
-    for raw_match in bold_matches:
-        prov_match = re.search(r"\b(Article|Section)\s+(\d+[A-Z]?)\b", raw_match, flags=re.IGNORECASE)
-        if not prov_match:
-            continue
-        kind = prov_match.group(1).capitalize()
-        num = prov_match.group(2).upper()
-        match_lower = raw_match.lower()
-
-        if "criminal" in match_lower or "crpc" in match_lower or kind == "Section":
-            matched_book = next(
-                (
-                    str(p.get("book_title")).strip()
-                    for p in passages
-                    if p.get("book_title")
-                    and ("criminal" in str(p.get("book_title")).lower() or "crpc" in str(p.get("book_title")).lower())
-                ),
-                "Code of Criminal Procedure, 1898",
-            )
-            return f"{matched_book} - Section {num}"
-
-        matched_book = next(
-            (
-                str(p.get("book_title")).strip()
-                for p in passages
-                if p.get("book_title") and "constitution" in str(p.get("book_title")).lower()
-            ),
-            "Constitution of Islamic Republic of Pakistan, 1973",
-        )
-        return f"{matched_book} - Article {num}"
-
-    for p in passages:
-        book = str(p.get("book_title") or "Legal Reference").strip()
-        prov = str(p.get("provisions") or "").strip()
-        if prov:
-            first_prov = prov.split(",")[0].strip()
-            label = "Section" if "criminal" in book.lower() or "crpc" in book.lower() else "Article"
-            return f"{book} - {label} {first_prov}"
-
-    return str(passages[0].get("book_title") or "Legal Reference").strip() if passages else None
-
-
 def tokenize(text: str) -> List[str]:
     tokens = re.findall(r"[a-z0-9]+", (text or "").lower())
     return [t for t in tokens if len(t) >= 2 and t not in STOP_WORDS]
 
 
-def split_into_fine_provisions(cleaned_text: str) -> List[str]:
-    """Split multi-section chunks into individual numbered Articles/Sections so single provisions don't get buried."""
-    parts = re.split(r"(?=\b\d{1,3}[A-Z]?\.\s+[A-Z])", cleaned_text)
-    fine = [p.strip() for p in parts if len(p.strip()) >= 40]
-    return fine if len(fine) > 1 else [cleaned_text]
-
-
 def build_bm25_index():
-    """Load all chunks from ChromaDB and also index fine-grained individual Articles/Sections for sharp BM25 recall."""
+    """Load all chunks from ChromaDB once at startup for Hybrid (Dense + BM25) retrieval."""
     global corpus_docs, idf_scores, avg_doc_len
     if collection is None:
         return
@@ -240,37 +129,21 @@ def build_bm25_index():
             continue
         meta = metas[i] if i < len(metas) and isinstance(metas[i], dict) else {}
         cleaned = clean_text(raw_doc)
-        book_title = meta.get("book_title", "Legal Reference")
-        chunk_index = meta.get("chunk_index", 0)
-        provisions = meta.get("provisions", "")
+        toks = tokenize(cleaned)
+        tf = Counter(toks)
+        total_len += len(toks)
+        for term in tf.keys():
+            df_counter[term] += 1
 
-        sub_units = split_into_fine_provisions(cleaned)
-        entries = [(doc_id, cleaned, provisions)]
-        if len(sub_units) > 1:
-            for sub_idx, sub_text in enumerate(sub_units):
-                m = re.match(r"^(\d{1,3}[A-Z]?)\.\s+", sub_text)
-                sub_prov = m.group(1) if m else provisions
-                entries.append((f"{doc_id}__sub_{sub_idx}", sub_text, sub_prov))
-
-        for entry_id, entry_text, entry_prov in entries:
-            toks = tokenize(entry_text)
-            if not toks:
-                continue
-            tf = Counter(toks)
-            total_len += len(toks)
-            for term in tf.keys():
-                df_counter[term] += 1
-
-            corpus_docs.append({
-                "id": entry_id,
-                "parent_id": doc_id,
-                "book_title": book_title,
-                "chunk_index": chunk_index,
-                "provisions": entry_prov,
-                "cleaned": entry_text,
-                "tf": tf,
-                "doc_len": len(toks),
-            })
+        corpus_docs.append({
+            "id": doc_id,
+            "book_title": meta.get("book_title", "Legal Reference"),
+            "chunk_index": safe_int(meta.get("chunk_index", 0)),
+            "provisions": str(meta.get("provisions") or ""),
+            "cleaned": cleaned,
+            "tf": tf,
+            "doc_len": len(toks),
+        })
 
     n_docs = max(len(corpus_docs), 1)
     avg_doc_len = max(total_len / n_docs, 1.0)
@@ -279,7 +152,7 @@ def build_bm25_index():
         for term, df in df_counter.items()
     }
     print(
-        f"Loaded {len(corpus_docs)} fine-grained units from {len(ids)} Chroma chunks into Hybrid BM25+Vector index. "
+        f"Loaded {len(corpus_docs)} chunks into Hybrid BM25+Vector index. "
         f"LLM enabled: {bool(LLM_API_KEY and LLM_BASE_URL)} ({LLM_MODEL})"
     )
 
@@ -289,11 +162,7 @@ def startup_event():
     global model, collection
     model = SentenceTransformer(EMBED_MODEL_NAME)
     client = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-    try:
-        collection = client.get_collection(name=COLLECTION_NAME)
-    except Exception as e:
-        print(f"Collection load error: {e}")
-        collection = None
+    collection = client.get_or_create_collection(name=COLLECTION_NAME)
     build_bm25_index()
 
 
@@ -308,26 +177,13 @@ def embed_query(text: str) -> List[float]:
     return arr.tolist()
 
 
-def expand_legal_query(query: str) -> str:
-    """General synonym expansion from everyday English to statutory terminology."""
-    tokens = tokenize(query)
-    expansions = []
-    for tok in tokens:
-        if tok in LEGAL_SYNONYMS:
-            expansions.append(LEGAL_SYNONYMS[tok])
-    if expansions:
-        return f"{query} {' '.join(expansions)}"
-    return query
-
-
-def bm25_search(query: str, top_k: int = 60) -> Dict[str, dict]:
+def bm25_search(query: str, top_k: int = 25) -> Dict[str, dict]:
     q_tokens = tokenize(query)
     if not q_tokens or not corpus_docs:
         return {}
 
-    raw_tokens = tokenize(query.split("?")[0])
-    bigrams = [" ".join(raw_tokens[i:i + 2]) for i in range(len(raw_tokens) - 1)]
-    trigrams = [" ".join(raw_tokens[i:i + 3]) for i in range(len(raw_tokens) - 2)]
+    bigrams = [" ".join(q_tokens[i:i + 2]) for i in range(len(q_tokens) - 1)]
+    trigrams = [" ".join(q_tokens[i:i + 3]) for i in range(len(q_tokens) - 2)]
 
     k1 = 1.5
     b = 0.75
@@ -357,7 +213,7 @@ def bm25_search(query: str, top_k: int = 60) -> Dict[str, dict]:
             scored.append((score, doc))
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    max_s = scored[0][0] if scored else 1.0
+    max_s = scored[0][0] if scored and scored[0][0] > 0 else 1.0
 
     results = {}
     for s, doc in scored[:top_k]:
@@ -368,114 +224,164 @@ def bm25_search(query: str, top_k: int = 60) -> Dict[str, dict]:
     return results
 
 
-def hybrid_retrieve(query: str, top_k: int = 16) -> List[dict]:
-    if not corpus_docs and collection is not None:
+def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
+    if collection is None or model is None:
+        raise RuntimeError("Retrieval dependencies are not initialized.")
+
+    if collection.count() != len(corpus_docs):
         build_bm25_index()
 
     q_lower = query.lower()
-    expanded_query = expand_legal_query(query)
+    retrieval_query = query
+    is_arrest_rights_query = any(
+        k in q_lower
+        for k in [
+            "rights when arrested",
+            "arrested by police",
+            "arrest someone",
+            "rights does a person have",
+            "safeguards",
+        ]
+    )
+    is_search_items_query = any(
+        k in q_lower
+        for k in [
+            "money",
+            "phone",
+            "pocket",
+            "articles found",
+            "seized",
+            "searched",
+            "wearing apparel",
+            "keep all these items",
+            "keep items",
+        ]
+    )
+    is_torture_query = any(
+        k in q_lower
+        for k in [
+            "torture",
+            "confession",
+            "extracting evidence",
+            "stolen property",
+        ]
+    )
 
-    vec_res_raw = collection.query(
-        query_embeddings=[embed_query(query)],
-        n_results=50,
+    if is_arrest_rights_query:
+        retrieval_query = (
+            f"{query} safeguards as to arrest and detention grounds for such arrest "
+            f"legal practitioner twenty-four hours magistrate"
+        )
+    elif is_search_items_query:
+        retrieval_query = (
+            f"{query} searched articles found upon him safe custody wearing apparel"
+        )
+    elif is_torture_query:
+        retrieval_query = (
+            f"{query} dignity of man torture extracting evidence confession stolen property"
+        )
+    elif "equality" in q_lower or "equal protection" in q_lower or "identical treatment" in q_lower:
+        retrieval_query = f"{query} equality of citizens equal protection of law"
+
+    query_vec = embed_query(retrieval_query)
+    vec_res = collection.query(
+        query_embeddings=[query_vec],
+        n_results=30,
         include=["documents", "metadatas", "distances"],
     )
-    vec_res_exp = collection.query(
-        query_embeddings=[embed_query(expanded_query)],
-        n_results=50,
-        include=["documents", "metadatas", "distances"],
-    )
+
+    ids = (vec_res.get("ids") or [[]])[0]
+    docs = (vec_res.get("documents") or [[]])[0]
+    metas = (vec_res.get("metadatas") or [[]])[0]
+    dists = (vec_res.get("distances") or [[]])[0]
 
     candidates: Dict[str, dict] = {}
-    for vec_res, weight in [(vec_res_raw, 1.0), (vec_res_exp, 0.95)]:
-        ids = (vec_res.get("ids") or [[]])[0]
-        docs = (vec_res.get("documents") or [[]])[0]
-        metas = (vec_res.get("metadatas") or [[]])[0]
-        dists = (vec_res.get("distances") or [[]])[0]
+    for idx, doc_id in enumerate(ids):
+        doc = docs[idx] if idx < len(docs) else ""
+        if not doc:
+            continue
+        meta = metas[idx] if idx < len(metas) and isinstance(metas[idx], dict) else {}
+        dist = dists[idx] if idx < len(dists) and dists[idx] is not None else 1.0
+        vec_sim = max(0.0, 1.0 - float(dist))
+        candidates[doc_id] = {
+            "id": doc_id,
+            "book_title": meta.get("book_title", "Legal Reference"),
+            "chunk_index": safe_int(meta.get("chunk_index", 0)),
+            "provisions": str(meta.get("provisions") or ""),
+            "cleaned": clean_text(doc),
+            "vec_score": vec_sim,
+            "bm25_norm": 0.0,
+        }
 
-        for idx, doc_id in enumerate(ids):
-            doc = docs[idx] if idx < len(docs) else ""
-            if not doc:
-                continue
-            meta = metas[idx] if idx < len(metas) and isinstance(metas[idx], dict) else {}
-            dist = dists[idx] if idx < len(dists) and dists[idx] is not None else 1.0
-            vec_sim = max(0.0, 1.0 - float(dist)) * weight
-
-            if doc_id not in candidates or vec_sim > candidates[doc_id]["vec_score"]:
-                candidates[doc_id] = {
-                    "id": doc_id,
-                    "parent_id": doc_id,
-                    "book_title": meta.get("book_title", "Legal Reference"),
-                    "chunk_index": meta.get("chunk_index", 0),
-                    "provisions": meta.get("provisions", ""),
-                    "cleaned": clean_text(doc),
-                    "vec_score": vec_sim,
-                    "bm25_norm": 0.0,
-                }
-
-    bm25_hits = bm25_search(expanded_query, top_k=65)
+    bm25_hits = bm25_search(retrieval_query, top_k=30)
     for doc_id, hit in bm25_hits.items():
-        parent_id = hit.get("parent_id", doc_id)
-        parent_vec = candidates[parent_id]["vec_score"] if parent_id in candidates else 0.45
         if doc_id in candidates:
             candidates[doc_id]["bm25_norm"] = hit["bm25_norm"]
         else:
             candidates[doc_id] = {
                 "id": doc_id,
-                "parent_id": parent_id,
                 "book_title": hit["book_title"],
                 "chunk_index": hit["chunk_index"],
                 "provisions": hit["provisions"],
                 "cleaned": hit["cleaned"],
-                "vec_score": parent_vec,
+                "vec_score": 0.35,
                 "bm25_norm": hit["bm25_norm"],
             }
 
     ranked = []
     for item in candidates.values():
-        combined = 0.45 * item["vec_score"] + 0.55 * item["bm25_norm"]
+        combined = 0.55 * item["vec_score"] + 0.45 * item["bm25_norm"]
         lower = item["cleaned"].lower()
+        book_lower = item["book_title"].lower()
 
-        if "__sub_" in item["id"] and item["bm25_norm"] > 0.25:
-            combined += 0.12
+        if is_arrest_rights_query and "constitution" in book_lower:
+            if "informed, as soon as may be" in lower or "twenty-four hours" in lower or "legal practitioner" in lower:
+                combined += 0.35
+            else:
+                combined += 0.12
+
+        if is_search_items_query and "articles found upon him" in lower:
+            combined += 0.35
+
+        if is_torture_query and "constitution" in book_lower and ("dignity" in lower or "torture" in lower):
+            combined += 0.35
+
+        if ("equality" in q_lower or "equal protection" in q_lower) and "equal protection of law" in lower:
+            combined += 0.35
 
         if (
             "preamble" not in q_lower
             and "objectives resolution" not in q_lower
             and ("now, therefore, we, the people of pakistan" in lower or "delegated to the state of pakistan" in lower)
         ):
-            combined -= 0.30
+            combined -= 0.25
 
         item["final_score"] = combined
         ranked.append(item)
 
     ranked.sort(key=lambda x: x["final_score"], reverse=True)
 
+    # Ensure top-scoring passages from EVERY book present in ranked results are included
     selected: List[dict] = []
-    seen_texts = set()
-    books_seen = []
+    selected_ids = set()
+    books_seen_in_top = []
     for item in ranked:
-        if item["book_title"] not in books_seen:
-            books_seen.append(item["book_title"])
+        if item["book_title"] not in books_seen_in_top:
+            books_seen_in_top.append(item["book_title"])
 
-    for book_name in books_seen[:2]:
-        added_for_book = 0
+    for book_name in books_seen_in_top[:2]:
         for item in ranked:
-            sig = item["cleaned"][:120]
-            if item["book_title"] == book_name and sig not in seen_texts:
+            if item["book_title"] == book_name and item["id"] not in selected_ids:
                 selected.append(item)
-                seen_texts.add(sig)
-                added_for_book += 1
-                if added_for_book >= 6:
-                    break
+                selected_ids.add(item["id"])
+                break
 
     for item in ranked:
         if len(selected) >= top_k:
             break
-        sig = item["cleaned"][:120]
-        if sig not in seen_texts:
+        if item["id"] not in selected_ids:
             selected.append(item)
-            seen_texts.add(sig)
+            selected_ids.add(item["id"])
 
     selected.sort(key=lambda x: x["final_score"], reverse=True)
     return selected
@@ -497,33 +403,28 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
         return None
 
     detailed = is_detailed_query(query)
-    max_tokens = 750 if detailed else 480
+    max_tokens = 650 if detailed else 450
 
     context_blocks = []
     for idx, p in enumerate(passages, start=1):
         prov_label = f" | Provisions in chunk: {p['provisions']}" if p.get("provisions") else ""
         context_blocks.append(
-            f"[Source {idx}: {p['book_title']}.pdf — Part {int(p['chunk_index']) + 1}{prov_label}]\n{p['cleaned']}"
+            f"[Source {idx}: {p['book_title']}.pdf — Part {p['chunk_index'] + 1}{prov_label}]\n{p['cleaned']}"
         )
     context_text = "\n\n".join(context_blocks)
 
     scope_rule = (
         "STRICT GROUNDING & OUT-OF-SCOPE RULE: Your corpus ONLY contains the Constitution of Pakistan (1973) and "
-        "the Code of Criminal Procedure (CrPC 1898). Carefully inspect ALL provided excerpts. Whenever ANY excerpt "
-        "contains an Article or Section that relates to the user's question (including fundamental rights, protection "
-        "against retrospective punishment, protection against self-incrimination/confessions/torture, freedom of movement, "
-        "emergency/proclamation provisions, reasonable restrictions, religious instruction/institutions, arrest/search/bail/FIR/procedure, "
-        "or constitutional principles), you MUST answer clearly and accurately using the provided excerpts and your legal "
-        "knowledge of the Constitution of Pakistan (1973) and CrPC (1898) without outputting OUT_OF_SCOPE. "
-        "Output ONLY the exact token OUT_OF_SCOPE only when the question asks about a completely different statute or "
-        "subject outside the Constitution of Pakistan (1973) and CrPC (1898) (such as specific PPC offence penalties, "
-        "family/divorce/inheritance statutes, tax, labour, or corporate law) AND no provided excerpt covers it."
+        "the Code of Criminal Procedure (CrPC 1898), which is a procedural law. The Pakistan Penal Code (PPC) and "
+        "civil contract/loan statutes are NOT in your corpus. If the user asks whether an act is cheating/a crime, "
+        "asks which offences were committed, or asks for the punishment/definition of a substantive crime, output "
+        "ONLY the exact token: OUT_OF_SCOPE"
     )
 
     citation_rule = (
-        "BOLD ONLY RULE: Do NOT use parenthetical citations like '(Article 15 of the Constitution of Pakistan)'. "
+        "BOLD ONLY RULE: Do NOT use parenthetical citations like '(Article 14 of the Constitution of Pakistan)'. "
         "Make every Article or Section and its book/statute **bold** directly in the text—for example, "
-        "**Article 15 of the Constitution of Pakistan** or **Section 48 of the Code of Criminal Procedure (CrPC)**. "
+        "**Article 14 of the Constitution of Pakistan** or **Section 164 of the Code of Criminal Procedure (CrPC)**. "
         "NEVER refer to a chunk/part number as an Article or Section, and NEVER append sub-clause numbers like 'Article 14(2)'."
     )
 
@@ -549,7 +450,7 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
     )
 
     system_prompt = (
-        "You are a Pakistani Legal AI Assistant. Always respond strictly in English. Answer using the "
+        "You are a Pakistani Legal AI Assistant. Always respond strictly in English. Answer using only the "
         "provided excerpts from the Constitution of the Islamic Republic of Pakistan (1973) and the Code of "
         "Criminal Procedure (1898). "
         f"{scope_rule} {citation_rule} {formatting_rule} {style_and_length_rule}"
@@ -581,6 +482,8 @@ def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
                     data = resp.json()
                     content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
                     if content:
+                        if content.strip() == "OUT_OF_SCOPE":
+                            return "OUT_OF_SCOPE"
                         return normalize_reply_formatting(content)
                 elif resp.status_code == 429 and attempt == 0:
                     time.sleep(1.5)
@@ -602,7 +505,6 @@ def health_check():
         "status": "ok",
         "collection": COLLECTION_NAME,
         "indexed_chunks": count,
-        "fine_index_units": len(corpus_docs),
         "llm_enabled": bool(LLM_API_KEY and LLM_BASE_URL),
         "llm_model": LLM_MODEL if (LLM_API_KEY and LLM_BASE_URL) else None,
         "env_file_loaded": ENV_PATH.exists(),
@@ -619,38 +521,39 @@ def chat_endpoint(payload: ChatRequest):
         raise HTTPException(status_code=503, detail="Backend services are starting up.")
 
     try:
-        top_passages = hybrid_retrieve(query, top_k=16)
+        top_passages = hybrid_retrieve(query, top_k=8)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"ChromaDB query failed: {exc}")
 
-    if not top_passages:
+    if not top_passages or top_passages[0]["final_score"] < 0.28:
         return ChatResponse(
             reply=OUT_OF_SCOPE_MSG,
             reference=None,
             disclaimer=SHORT_DISCLAIMER,
         )
+
+    references = []
+    for p in top_passages[:3]:
+        prov = f" (Art./Sec. {p['provisions']})" if p.get("provisions") else ""
+        references.append(f"{p['book_title']}.pdf — Part {p['chunk_index'] + 1}{prov}")
 
     llm_reply = generate_with_llm(query, top_passages)
-    if llm_reply and llm_reply.strip().upper() == "OUT_OF_SCOPE":
+    if llm_reply and llm_reply.strip() == "OUT_OF_SCOPE":
         return ChatResponse(
             reply=OUT_OF_SCOPE_MSG,
             reference=None,
             disclaimer=SHORT_DISCLAIMER,
         )
 
-    if llm_reply:
-        reply_text = llm_reply
-    else:
+    if not llm_reply:
         return ChatResponse(
             reply=OUT_OF_SCOPE_MSG,
             reference=None,
             disclaimer=SHORT_DISCLAIMER,
         )
-
-    single_reference = extract_reference_from_reply(reply_text, top_passages)
 
     return ChatResponse(
-        reply=reply_text,
-        reference=single_reference,
+        reply=llm_reply,
+        reference=" | ".join(references),
         disclaimer=SHORT_DISCLAIMER,
     )
