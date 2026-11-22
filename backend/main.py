@@ -38,8 +38,8 @@ LLM_FALLBACK_MODELS = [
 last_llm_error: str = ""
 
 SHORT_DISCLAIMER = (
-    "Disclaimer: For prototype informational purposes only; not formal legal advice. "
-    "This is only for general guidance, not professional legal support."
+    "Disclaimer: This is only for general guidance, not professional legal support. "
+   
 )
 
 OUT_OF_SCOPE_MSG = (
