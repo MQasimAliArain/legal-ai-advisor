@@ -31,7 +31,8 @@ LLM_BASE_URL = (
 ).strip()
 LLM_MODEL = (os.getenv("LLM_MODEL") or "openai/gpt-oss-120b").strip()
 SHORT_DISCLAIMER = (
-    "Disclaimer: For prototype informational purposes only; not formal legal advice."
+    "Disclaimer: For prototype informational purposes only; not formal legal advice. "
+    "This is only for general guidance, not professional legal support."
 )
 
 OUT_OF_SCOPE_MSG = (
@@ -255,11 +256,13 @@ def expand_query(query: str) -> List[str]:
         return []
     system = (
         "You help search the Constitution of Pakistan (1973) and the Code of Criminal Procedure (1898). "
-        "Rewrite the user's everyday question as 3 short search queries (max 14 words each) that use the formal legal "
-        "vocabulary and the section/article heading wording those books use (for example: 'safeguards as to arrest and "
-        "detention', 'protection against self-incrimination', 'protection against retrospective punishment', "
-        "'search of place entered by person sought to be arrested'). Cover different legal angles of the question. "
-        "Output exactly 3 lines, one query per line, no numbering, no explanations."
+        "Rewrite the user's everyday question as 5 short search queries (max 16 words each). Queries 1-3 must use the "
+        "formal legal vocabulary and the section/article HEADING wording those books use (for example: 'safeguards as to "
+        "arrest and detention', 'protection against self-incrimination', 'protection against retrospective punishment', "
+        "'mode of searching women', 'search of place entered by person sought to be arrested'). Queries 4-5 must be written "
+        "as the likely WORDING of the legal rule itself, in the style of an old statute (for example: 'the search shall be "
+        "made by another woman with strict regard to decency'). Cover different legal angles. "
+        "Output exactly 5 lines, one query per line, no numbering, no explanations."
     )
     out = call_llm(system, query, 900)
     if not out:
@@ -269,10 +272,10 @@ def expand_query(query: str) -> List[str]:
         ln = re.sub(r"^[\s\-\*\d\.\)]+", "", ln).strip()
         if 3 <= len(ln) <= 200:
             lines.append(ln)
-    return lines[:3]
+    return lines[:5]
 
 
-def hybrid_retrieve(queries: List[str], top_k: int = 7) -> List[dict]:
+def hybrid_retrieve(queries: List[str], top_k: int = 7, wide: bool = False) -> List[dict]:
     """Hybrid (vector + BM25) retrieval over the user's question plus its legal-vocabulary rewrites."""
     if collection is None or model is None:
         raise RuntimeError("Retrieval dependencies are not initialized.")
@@ -284,7 +287,7 @@ def hybrid_retrieve(queries: List[str], top_k: int = 7) -> List[dict]:
     q_lower = original.lower()
     vec_res = collection.query(
         query_embeddings=[embed_query(q) for q in queries],
-        n_results=20,
+        n_results=25,
         include=["documents", "metadatas", "distances"],
     )
 
@@ -321,7 +324,7 @@ def hybrid_retrieve(queries: List[str], top_k: int = 7) -> List[dict]:
 
     for qi, q in enumerate(queries):
         weight = 1.0 if qi == 0 else 0.85
-        for doc_id, hit in bm25_search(q, top_k=20).items():
+        for doc_id, hit in bm25_search(q, top_k=25).items():
             norm = hit["bm25_norm"] * weight
             if doc_id in candidates:
                 candidates[doc_id]["bm25_norm"] = max(candidates[doc_id]["bm25_norm"], norm)
@@ -362,13 +365,13 @@ def hybrid_retrieve(queries: List[str], top_k: int = 7) -> List[dict]:
     for item in ranked:
         if len(selected) >= top_k:
             break
-        if item["book_title"] != top_book and item["final_score"] < 0.6 * top_score:
+        if item["book_title"] != top_book and item["final_score"] < (0.35 if wide else 0.6) * top_score:
             continue
         selected.append(item)
 
     selected_keys = {(s["book_title"], s["chunk_index"]) for s in selected}
     extras: List[dict] = []
-    for item in selected[:2]:
+    for item in selected[: (4 if wide else 2)]:
         for delta in (-1, 1):
             key = (item["book_title"], item["chunk_index"] + delta)
             if key in chunk_map and key not in selected_keys:
@@ -480,7 +483,9 @@ def build_reference(reply_text: str, passages: List[dict]) -> Optional[str]:
     for kind, num in extract_citations(reply_text):
         p = find_provision_passage(num, kind, passages)
         if p:
-            refs.append(f"{p['book_title']}.pdf — Part {p['chunk_index'] + 1} (Art./Sec. {num})")
+            label = "Article" if kind == "constitution" else "Section"
+            title = re.sub(r"\.pdf$", "", p["book_title"], flags=re.IGNORECASE)
+            refs.append(f"{title} - {label} {num}")
     refs = list(dict.fromkeys(refs))
     return " | ".join(refs[:4]) if refs else None
 
@@ -509,11 +514,14 @@ def generate_with_llm(query: str, passages: List[dict]) -> dict:
         "Pakistan (1973) and the Code of Criminal Procedure (CrPC 1898).\n"
         "1. UNDERSTAND EVERYDAY WORDING: users are ordinary people. Match their question to the excerpts by LEGAL MEANING, "
         "not by exact words (for example being punished under a new law for an old act is a question about retrospective "
-        "punishment; being forced to confess is a question about self-incrimination and torture). If any excerpt answers "
-        "the legal issue, you MUST answer from it.\n"
+        "punishment; being forced to confess is a question about self-incrimination and torture; a male officer searching a "
+        "woman is a question about the mode of searching women). Questions may be tricky, hypothetical or ask about an "
+        "exception. If any excerpt contains the rule that governs the situation, you MUST answer from it: state what the "
+        "provision says and, if the text states no exception or alternative, say that the provision gives none.\n"
         "2. STRICT GROUNDING: every statement must be supported by the excerpts. Never use outside knowledge and never "
-        "guess. Output ONLY the exact token OUT_OF_SCOPE when NO excerpt addresses the legal issue of the question (for "
-        "example it is about the Pakistan Penal Code offences/punishments, contracts, or general knowledge).\n"
+        "guess. Output ONLY the exact token OUT_OF_SCOPE when NO excerpt contains any rule about the subject of the "
+        "question (for example it is about Pakistan Penal Code offences/punishments, contracts, or general knowledge). "
+        "Read ALL excerpts carefully before deciding; do not choose OUT_OF_SCOPE if any excerpt is relevant.\n"
         "3. CORRECT PROVISIONS: attribute to a provision ONLY what its own text says. Never move the content of one "
         "Section/Article onto another number. Cite a number ONLY if its heading (for example '12. Protection against ...') "
         "or a direct reference to it appears in the excerpts. The Constitution uses Articles; the CrPC uses Sections. "
@@ -570,7 +578,7 @@ def health_check():
     count = collection.count() if collection is not None else 0
     return {
         "status": "ok",
-        "version": "v4-query-rewrite-grounded-refs",
+        "version": "v5-wide-retry-clean-refs",
         "collection": COLLECTION_NAME,
         "indexed_chunks": count,
         "llm_enabled": bool(LLM_API_KEY and LLM_BASE_URL),
@@ -612,6 +620,14 @@ def chat_endpoint(payload: ChatRequest):
         return ChatResponse(reply=OUT_OF_SCOPE_MSG, reference=None, disclaimer=SHORT_DISCLAIMER)
 
     result = generate_with_llm(query, passages)
+    if result["status"] == "out":
+        try:
+            wide_passages = hybrid_retrieve(queries, top_k=12, wide=True)
+            if wide_passages:
+                print("Retrying with wider context before declaring out of scope.")
+                result = generate_with_llm(query, wide_passages)
+        except Exception as exc:
+            print(f"Wide retry failed: {exc}")
     print(f"Answer status={result['status']} reference={result['reference']}")
     return ChatResponse(
         reply=result["reply"],
