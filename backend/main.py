@@ -30,6 +30,13 @@ LLM_BASE_URL = (
     or ("https://api.groq.com/openai/v1" if LLM_API_KEY else "")
 ).strip()
 LLM_MODEL = (os.getenv("LLM_MODEL") or "openai/gpt-oss-120b").strip()
+LLM_FALLBACK_MODELS = [
+    m.strip()
+    for m in (os.getenv("LLM_FALLBACK_MODELS") or "llama-3.3-70b-versatile,openai/gpt-oss-20b").split(",")
+    if m.strip()
+]
+last_llm_error: str = ""
+
 SHORT_DISCLAIMER = (
     "Disclaimer: For prototype informational purposes only; not formal legal advice. "
     "This is only for general guidance, not professional legal support."
@@ -264,7 +271,7 @@ def expand_query(query: str) -> List[str]:
         "made by another woman with strict regard to decency'). Cover different legal angles. "
         "Output exactly 5 lines, one query per line, no numbering, no explanations."
     )
-    out = call_llm(system, query, 900)
+    out = call_llm(system, query, 600)
     if not out:
         return []
     lines = []
@@ -432,48 +439,62 @@ def extract_citations(reply: str) -> List[Tuple[str, str]]:
 
 
 def call_llm(system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-    body = {
-        "model": LLM_MODEL,
-        "temperature": 0.0,
-        "max_tokens": max_tokens,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    }
-    if "gpt-oss" in LLM_MODEL.lower():
-        body["reasoning_effort"] = "low"
+    """Calls the primary model; on rate limits/errors automatically tries the fallback models."""
+    global last_llm_error
+    last_llm_error = ""
+    models = [LLM_MODEL] + [m for m in LLM_FALLBACK_MODELS if m != LLM_MODEL]
 
-    for attempt in range(3):
-        try:
-            with httpx.Client(timeout=60.0) as client:
-                resp = client.post(
-                    f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": f"Bearer {LLM_API_KEY}",
-                    },
-                    json=body,
-                )
-            if resp.status_code == 200:
-                data = resp.json()
-                content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-                content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
-                if content:
-                    return content
-                print("LLM returned empty content (possibly token limit).")
-                return None
-            if resp.status_code in (429, 500, 502, 503) and attempt < 2:
-                time.sleep(2.0 * (attempt + 1))
-                continue
-            print(f"LLM API error {resp.status_code}: {resp.text}")
-            return None
-        except Exception as exc:
-            print(f"LLM API request failed: {exc}")
-            if attempt < 2:
-                time.sleep(1.5)
-                continue
-            return None
+    for model_name in models:
+        body = {
+            "model": model_name,
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        if "gpt-oss" in model_name.lower():
+            body["reasoning_effort"] = "low"
+
+        for attempt in range(2):
+            try:
+                with httpx.Client(timeout=45.0) as client:
+                    resp = client.post(
+                        f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {LLM_API_KEY}",
+                        },
+                        json=body,
+                    )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                    content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
+                    if content:
+                        return content
+                    last_llm_error = f"{model_name}: empty content (token limit?)"
+                    print(last_llm_error)
+                    break
+                last_llm_error = f"{model_name} HTTP {resp.status_code}: {resp.text[:300]}"
+                print(f"LLM API error -> {last_llm_error}")
+                if resp.status_code in (429, 500, 502, 503) and attempt == 0:
+                    try:
+                        wait = float(resp.headers.get("retry-after", "2"))
+                    except ValueError:
+                        wait = 2.0
+                    if wait <= 6:
+                        time.sleep(max(wait, 1.0))
+                        continue
+                break
+            except Exception as exc:
+                last_llm_error = f"{model_name} request failed: {exc}"
+                print(last_llm_error)
+                if attempt == 0:
+                    time.sleep(1.0)
+                    continue
+                break
     return None
 
 
@@ -497,7 +518,7 @@ def generate_with_llm(query: str, passages: List[dict]) -> dict:
         return {"status": "error", "reply": BUSY_MSG, "reference": None}
 
     detailed = is_detailed_query(query)
-    max_tokens = 2400 if detailed else 1800
+    max_tokens = 1800 if detailed else 1200
 
     context_blocks = []
     for idx, p in enumerate(passages, start=1):
@@ -578,12 +599,24 @@ def health_check():
     count = collection.count() if collection is not None else 0
     return {
         "status": "ok",
-        "version": "v5-wide-retry-clean-refs",
+        "version": "v6-llm-fallback",
         "collection": COLLECTION_NAME,
         "indexed_chunks": count,
         "llm_enabled": bool(LLM_API_KEY and LLM_BASE_URL),
         "llm_model": LLM_MODEL if (LLM_API_KEY and LLM_BASE_URL) else None,
         "env_file_loaded": ENV_PATH.exists(),
+    }
+
+
+@app.get("/llm-test")
+def llm_test():
+    """Open this URL in a browser to see whether the AI service (Groq) is working, and the exact error if not."""
+    out = call_llm("Reply with exactly the word: OK", "ping", 300)
+    return {
+        "ok": bool(out),
+        "reply": (out or "")[:50],
+        "models_tried_in_order": [LLM_MODEL] + [m for m in LLM_FALLBACK_MODELS if m != LLM_MODEL],
+        "last_error": last_llm_error,
     }
 
 
