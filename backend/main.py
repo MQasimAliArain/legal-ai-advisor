@@ -4,7 +4,7 @@ import re
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
@@ -39,6 +39,11 @@ OUT_OF_SCOPE_MSG = (
     "My current knowledge base only includes the Constitution of the Islamic Republic of Pakistan (1973) and the Code of Criminal Procedure (CrPC 1898)—other laws (such as the Pakistan Penal Code or civil statutes) are not indexed here."
 )
 
+BUSY_MSG = "The answer service is temporarily busy. Please send your question again in a few seconds."
+
+CONST_NAME = "Constitution of the Islamic Republic of Pakistan, 1973"
+CRPC_NAME = "Code of Criminal Procedure (CrPC), 1898"
+
 STOP_WORDS = {
     "what", "is", "the", "a", "an", "of", "in", "on", "for", "to", "and",
     "or", "how", "when", "where", "why", "who", "can", "should", "does",
@@ -60,6 +65,7 @@ app.add_middleware(
 model: Optional[SentenceTransformer] = None
 collection = None
 corpus_docs: List[dict] = []
+chunk_map: Dict[Tuple[str, int], dict] = {}
 idf_scores: Dict[str, float] = {}
 avg_doc_len: float = 1.0
 
@@ -88,6 +94,23 @@ def safe_int(val, default: int = 0) -> int:
         return default
 
 
+def book_kind(book_title: str) -> str:
+    t = (book_title or "").lower()
+    if "constitution" in t:
+        return "constitution"
+    if "criminal" in t or "crpc" in t or "procedure" in t:
+        return "crpc"
+    return "other"
+
+
+def book_display(kind: str, title: str) -> str:
+    if kind == "constitution":
+        return CONST_NAME
+    if kind == "crpc":
+        return CRPC_NAME
+    return title
+
+
 def normalize_reply_formatting(text: str) -> str:
     """Enforce clean formatting: bold headings and provisions only, no #, >, ---, sub-clause numbers, or trailing citation lists."""
     cleaned = re.sub(r"(?m)^\s*#{1,6}\s*(.+?)\s*$", r"**\1**", text)
@@ -95,7 +118,6 @@ def normalize_reply_formatting(text: str) -> str:
     cleaned = re.sub(r"(?m)^\s*[-*_]{3,}\s*$", "", cleaned)
     cleaned = re.sub(r"\b(Article|Section)\s+(\d+[A-Z]?)\(\d+\)", r"\1 \2", cleaned)
     cleaned = re.sub(r"(?<!\*)\*((?:Article|Section)\s+[^*\n]+?)\*(?!\*)", r"**\1**", cleaned)
-    # Turn parenthetical citations like "(Article 19 of the Constitution of Pakistan)" into bold inline text
     cleaned = re.sub(r"\(\s*(\*\*)?((?:Article|Section)\s+[^()\n]+?)(\*\*)?\s*\)", r"**\2**", cleaned)
     cleaned = re.sub(r"\*\*+", "**", cleaned)
     cleaned = re.sub(r"\n+\*\*Citations?\*\*[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
@@ -110,7 +132,7 @@ def tokenize(text: str) -> List[str]:
 
 def build_bm25_index():
     """Load all chunks from ChromaDB once at startup for Hybrid (Dense + BM25) retrieval."""
-    global corpus_docs, idf_scores, avg_doc_len
+    global corpus_docs, idf_scores, avg_doc_len, chunk_map
     if collection is None:
         return
 
@@ -120,6 +142,7 @@ def build_bm25_index():
     metas = all_data.get("metadatas") or []
 
     corpus_docs = []
+    chunk_map = {}
     df_counter: Counter = Counter()
     total_len = 0
 
@@ -135,7 +158,7 @@ def build_bm25_index():
         for term in tf.keys():
             df_counter[term] += 1
 
-        corpus_docs.append({
+        entry = {
             "id": doc_id,
             "book_title": meta.get("book_title", "Legal Reference"),
             "chunk_index": safe_int(meta.get("chunk_index", 0)),
@@ -143,7 +166,9 @@ def build_bm25_index():
             "cleaned": cleaned,
             "tf": tf,
             "doc_len": len(toks),
-        })
+        }
+        corpus_docs.append(entry)
+        chunk_map[(entry["book_title"], entry["chunk_index"])] = entry
 
     n_docs = max(len(corpus_docs), 1)
     avg_doc_len = max(total_len / n_docs, 1.0)
@@ -217,14 +242,12 @@ def bm25_search(query: str, top_k: int = 25) -> Dict[str, dict]:
 
     results = {}
     for s, doc in scored[:top_k]:
-        results[doc["id"]] = {
-            **doc,
-            "bm25_norm": s / max_s,
-        }
+        results[doc["id"]] = {**doc, "bm25_norm": s / max_s}
     return results
 
 
-def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
+def hybrid_retrieve(query: str, top_k: int = 6) -> List[dict]:
+    """Generic hybrid retrieval (no question-specific hacks) + neighbouring chunks so sections are never cut in half."""
     if collection is None or model is None:
         raise RuntimeError("Retrieval dependencies are not initialized.")
 
@@ -232,58 +255,7 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
         build_bm25_index()
 
     q_lower = query.lower()
-    retrieval_query = query
-    is_arrest_rights_query = any(
-        k in q_lower
-        for k in [
-            "rights when arrested",
-            "arrested by police",
-            "arrest someone",
-            "rights does a person have",
-            "safeguards",
-        ]
-    )
-    is_search_items_query = any(
-        k in q_lower
-        for k in [
-            "money",
-            "phone",
-            "pocket",
-            "articles found",
-            "seized",
-            "searched",
-            "wearing apparel",
-            "keep all these items",
-            "keep items",
-        ]
-    )
-    is_torture_query = any(
-        k in q_lower
-        for k in [
-            "torture",
-            "confession",
-            "extracting evidence",
-            "stolen property",
-        ]
-    )
-
-    if is_arrest_rights_query:
-        retrieval_query = (
-            f"{query} safeguards as to arrest and detention grounds for such arrest "
-            f"legal practitioner twenty-four hours magistrate"
-        )
-    elif is_search_items_query:
-        retrieval_query = (
-            f"{query} searched articles found upon him safe custody wearing apparel"
-        )
-    elif is_torture_query:
-        retrieval_query = (
-            f"{query} dignity of man torture extracting evidence confession stolen property"
-        )
-    elif "equality" in q_lower or "equal protection" in q_lower or "identical treatment" in q_lower:
-        retrieval_query = f"{query} equality of citizens equal protection of law"
-
-    query_vec = embed_query(retrieval_query)
+    query_vec = embed_query(query)
     vec_res = collection.query(
         query_embeddings=[query_vec],
         n_results=30,
@@ -310,10 +282,11 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
             "provisions": str(meta.get("provisions") or ""),
             "cleaned": clean_text(doc),
             "vec_score": vec_sim,
+            "vec_real": vec_sim,
             "bm25_norm": 0.0,
         }
 
-    bm25_hits = bm25_search(retrieval_query, top_k=30)
+    bm25_hits = bm25_search(query, top_k=30)
     for doc_id, hit in bm25_hits.items():
         if doc_id in candidates:
             candidates[doc_id]["bm25_norm"] = hit["bm25_norm"]
@@ -324,7 +297,8 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
                 "chunk_index": hit["chunk_index"],
                 "provisions": hit["provisions"],
                 "cleaned": hit["cleaned"],
-                "vec_score": 0.35,
+                "vec_score": 0.25,
+                "vec_real": 0.0,
                 "bm25_norm": hit["bm25_norm"],
             }
 
@@ -332,59 +306,60 @@ def hybrid_retrieve(query: str, top_k: int = 8) -> List[dict]:
     for item in candidates.values():
         combined = 0.55 * item["vec_score"] + 0.45 * item["bm25_norm"]
         lower = item["cleaned"].lower()
-        book_lower = item["book_title"].lower()
-
-        if is_arrest_rights_query and "constitution" in book_lower:
-            if "informed, as soon as may be" in lower or "twenty-four hours" in lower or "legal practitioner" in lower:
-                combined += 0.35
-            else:
-                combined += 0.12
-
-        if is_search_items_query and "articles found upon him" in lower:
-            combined += 0.35
-
-        if is_torture_query and "constitution" in book_lower and ("dignity" in lower or "torture" in lower):
-            combined += 0.35
-
-        if ("equality" in q_lower or "equal protection" in q_lower) and "equal protection of law" in lower:
-            combined += 0.35
-
         if (
             "preamble" not in q_lower
             and "objectives resolution" not in q_lower
             and ("now, therefore, we, the people of pakistan" in lower or "delegated to the state of pakistan" in lower)
         ):
             combined -= 0.25
-
         item["final_score"] = combined
         ranked.append(item)
 
     ranked.sort(key=lambda x: x["final_score"], reverse=True)
+    if not ranked:
+        return []
 
-    # Ensure top-scoring passages from EVERY book present in ranked results are included
+    best_vec = max((r["vec_real"] for r in ranked), default=0.0)
+    top_score = ranked[0]["final_score"]
+    top_book = ranked[0]["book_title"]
+
+    # Take best chunks; a chunk from a different book is only used if it is genuinely close in relevance.
     selected: List[dict] = []
-    selected_ids = set()
-    books_seen_in_top = []
-    for item in ranked:
-        if item["book_title"] not in books_seen_in_top:
-            books_seen_in_top.append(item["book_title"])
-
-    for book_name in books_seen_in_top[:2]:
-        for item in ranked:
-            if item["book_title"] == book_name and item["id"] not in selected_ids:
-                selected.append(item)
-                selected_ids.add(item["id"])
-                break
-
     for item in ranked:
         if len(selected) >= top_k:
             break
-        if item["id"] not in selected_ids:
-            selected.append(item)
-            selected_ids.add(item["id"])
+        if item["book_title"] != top_book and item["final_score"] < 0.65 * top_score:
+            continue
+        selected.append(item)
 
-    selected.sort(key=lambda x: x["final_score"], reverse=True)
-    return selected
+    # Add neighbouring chunks of the 2 best hits so a section and its provisos are complete.
+    selected_keys = {(s["book_title"], s["chunk_index"]) for s in selected}
+    extras: List[dict] = []
+    for item in selected[:2]:
+        for delta in (-1, 1):
+            key = (item["book_title"], item["chunk_index"] + delta)
+            if key in chunk_map and key not in selected_keys:
+                nb = chunk_map[key]
+                extras.append({
+                    "id": nb["id"],
+                    "book_title": nb["book_title"],
+                    "chunk_index": nb["chunk_index"],
+                    "provisions": nb["provisions"],
+                    "cleaned": nb["cleaned"],
+                    "vec_score": 0.0,
+                    "vec_real": 0.0,
+                    "bm25_norm": 0.0,
+                    "final_score": 0.0,
+                })
+                selected_keys.add(key)
+
+    for s in selected:
+        s["best_vec"] = best_vec
+    final = selected + extras
+    final.sort(key=lambda x: (x["book_title"], x["chunk_index"]))
+    if final:
+        final[0]["best_vec"] = best_vec
+    return final
 
 
 def is_detailed_query(query: str) -> bool:
@@ -397,105 +372,172 @@ def is_detailed_query(query: str) -> bool:
     return any(trigger in q for trigger in detail_triggers)
 
 
-def generate_with_llm(query: str, passages: List[dict]) -> Optional[str]:
-    if not LLM_BASE_URL or not LLM_API_KEY:
-        print(f"LLM skipped: LLM_BASE_URL={bool(LLM_BASE_URL)}, LLM_API_KEY={bool(LLM_API_KEY)}")
-        return None
+def heading_exists(num: str, kind: str, passages: List[dict]) -> bool:
+    """True only if this Article/Section number really appears in the retrieved text of the right book."""
+    want_const = kind == "constitution"
+    pat_heading = re.compile(rf"(?<![\d/.,\-])\b{re.escape(num)}\.\s*[A-Z\"“(]")
+    pat_ref = re.compile(rf"\b(?:Article|Section|article|section)s?\s+{re.escape(num)}\b")
+    for p in passages:
+        is_const = book_kind(p["book_title"]) == "constitution"
+        if is_const != want_const:
+            continue
+        txt = p["cleaned"]
+        if pat_heading.search(txt) or pat_ref.search(txt):
+            return True
+    return False
 
-    detailed = is_detailed_query(query)
-    max_tokens = 650 if detailed else 450
 
-    context_blocks = []
-    for idx, p in enumerate(passages, start=1):
-        prov_label = f" | Provisions in chunk: {p['provisions']}" if p.get("provisions") else ""
-        context_blocks.append(
-            f"[Source {idx}: {p['book_title']}.pdf — Part {p['chunk_index'] + 1}{prov_label}]\n{p['cleaned']}"
-        )
-    context_text = "\n\n".join(context_blocks)
+def extract_citations(reply: str, sources_line: str) -> List[Tuple[str, str]]:
+    found: List[Tuple[str, str]] = []
+    for m in re.finditer(r"\b(Article|Section)\s+(\d{1,3}[A-Z]?)\b", reply):
+        kind = "constitution" if m.group(1) == "Article" else "crpc"
+        found.append((kind, m.group(2)))
+    for m in re.finditer(r"(constitution|crpc|other)\s*:\s*(\d{1,3}[A-Z]?)", sources_line or "", flags=re.IGNORECASE):
+        found.append((m.group(1).lower(), m.group(2).upper()))
+    seen = set()
+    out = []
+    for item in found:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
 
-    scope_rule = (
-        "STRICT GROUNDING & OUT-OF-SCOPE RULE: Your corpus ONLY contains the Constitution of Pakistan (1973) and "
-        "the Code of Criminal Procedure (CrPC 1898), which is a procedural law. The Pakistan Penal Code (PPC) and "
-        "civil contract/loan statutes are NOT in your corpus. If the user asks whether an act is cheating/a crime, "
-        "asks which offences were committed, or asks for the punishment/definition of a substantive crime, output "
-        "ONLY the exact token: OUT_OF_SCOPE"
-    )
 
-    citation_rule = (
-        "BOLD ONLY RULE: Do NOT use parenthetical citations like '(Article 14 of the Constitution of Pakistan)'. "
-        "Make every Article or Section and its book/statute **bold** directly in the text—for example, "
-        "**Article 14 of the Constitution of Pakistan** or **Section 164 of the Code of Criminal Procedure (CrPC)**. "
-        "NEVER refer to a chunk/part number as an Article or Section, and NEVER append sub-clause numbers like 'Article 14(2)'."
-    )
+def call_llm(system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
+    body = {
+        "model": LLM_MODEL,
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    if "gpt-oss" in LLM_MODEL.lower():
+        body["reasoning_effort"] = "low"
 
-    formatting_rule = (
-        "CLEAN FORMATTING RULE: Use ONLY plain text and **bold** formatting. NEVER use '#', '##', '###', blockquotes "
-        "('>' or quotes), '---' dividers, italics, or a separate 'Citations' list at the bottom."
-    )
-
-    style_and_length_rule = (
-        "DETAILED MODE RULE: Keep it clear and concise—not a long essay. Follow this exact structure using ONLY "
-        "these **Bold Headings**:\n"
-        "**Most Relevant**\n"
-        "State the single most relevant **Article** or **Section** and its book in **bold**, followed by a short "
-        "explanation (2–3 sentences) of that main provision in simple, everyday English.\n"
-        "**Supported Articles**\n"
-        "List the other relevant **Articles** and **Sections** across the books in **bold**, followed by a short "
-        "explanation (2–3 sentences) of how those supported provisions relate to the question in simple, everyday English."
-        if detailed
-        else "CONCISE MODE RULE: Keep the answer short, clear, and direct in simple everyday English (2–3 sentences "
-        "total). Include the **bold** Article or Section from ALL applicable books if more than one book has relevant "
-        "provisions. Start with 'Yes.' or 'No.' (or 'Generally, no.') when answering a yes/no question ('Can...', "
-        "'Does...', 'Is...')."
-    )
-
-    system_prompt = (
-        "You are a Pakistani Legal AI Assistant. Always respond strictly in English. Answer using only the "
-        "provided excerpts from the Constitution of the Islamic Republic of Pakistan (1973) and the Code of "
-        "Criminal Procedure (1898). "
-        f"{scope_rule} {citation_rule} {formatting_rule} {style_and_length_rule}"
-    )
-
-    for attempt in range(2):
+    for attempt in range(3):
         try:
-            with httpx.Client(timeout=25.0) as client:
+            with httpx.Client(timeout=60.0) as client:
                 resp = client.post(
                     f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
                     headers={
                         "Content-Type": "application/json",
                         "Authorization": f"Bearer {LLM_API_KEY}",
                     },
-                    json={
-                        "model": LLM_MODEL,
-                        "temperature": 0.1,
-                        "max_tokens": max_tokens,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {
-                                "role": "user",
-                                "content": f"Context:\n{context_text}\n\nQuestion: {query}",
-                            },
-                        ],
-                    },
+                    json=body,
                 )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    content = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
-                    if content:
-                        if content.strip() == "OUT_OF_SCOPE":
-                            return "OUT_OF_SCOPE"
-                        return normalize_reply_formatting(content)
-                elif resp.status_code == 429 and attempt == 0:
-                    time.sleep(1.5)
-                    continue
-                else:
-                    print(f"Groq API error {resp.status_code}: {resp.text}")
-                    break
+            if resp.status_code == 200:
+                data = resp.json()
+                content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+                content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
+                if content:
+                    return content
+                print("LLM returned empty content (possibly token limit).")
+                return None
+            if resp.status_code in (429, 500, 502, 503) and attempt < 2:
+                time.sleep(2.0 * (attempt + 1))
+                continue
+            print(f"LLM API error {resp.status_code}: {resp.text}")
+            return None
         except Exception as exc:
-            print(f"Groq API request failed: {exc}")
-            break
-
+            print(f"LLM API request failed: {exc}")
+            if attempt < 2:
+                time.sleep(1.5)
+                continue
+            return None
     return None
+
+
+def generate_with_llm(query: str, passages: List[dict]) -> dict:
+    """Returns {"status": "ok"|"out"|"error", "reply": str, "reference": Optional[str]}."""
+    if not LLM_BASE_URL or not LLM_API_KEY:
+        print(f"LLM skipped: LLM_BASE_URL={bool(LLM_BASE_URL)}, LLM_API_KEY={bool(LLM_API_KEY)}")
+        return {"status": "error", "reply": BUSY_MSG, "reference": None}
+
+    detailed = is_detailed_query(query)
+    max_tokens = 2200 if detailed else 1600
+
+    context_blocks = []
+    for idx, p in enumerate(passages, start=1):
+        kind = book_kind(p["book_title"])
+        label = "Articles" if kind == "constitution" else "Sections"
+        context_blocks.append(
+            f"[Excerpt {idx} | book_key={kind} | {book_display(kind, p['book_title'])} | numbered provisions here are {label}]\n{p['cleaned']}"
+        )
+    context_text = "\n\n".join(context_blocks)
+
+    rules = (
+        "You are a Pakistani Legal AI Assistant. Always respond strictly in English. "
+        "You may use ONLY the numbered excerpts provided, which come from the Constitution of the Islamic Republic of "
+        "Pakistan (1973) and the Code of Criminal Procedure (CrPC 1898).\n"
+        "1. STRICT GROUNDING: every statement must be directly supported by the excerpts. Never use outside knowledge and "
+        "never guess. If the excerpts do not clearly contain the answer (for example the question is about another law such "
+        "as the Pakistan Penal Code, contracts, or general knowledge, or the needed provision is not in the excerpts), "
+        "output ONLY the exact token: OUT_OF_SCOPE\n"
+        "2. CORRECT PROVISIONS: read each numbered provision carefully and attribute to a provision ONLY what its own text "
+        "says. Never move the content of one Section/Article onto another number. Cite a Section/Article number ONLY if "
+        "its heading (for example '48. Procedure where ...') or a direct reference to it appears in the excerpts. The "
+        "Constitution uses Articles; the CrPC uses Sections. Never cite excerpt numbers. Write each provision separately "
+        "(for example **Section 47** and **Section 48**, never 'Sections 47 and 48').\n"
+        "3. COMPLETENESS: include the conditions, provisos and exceptions that matter for the answer. Do not mention "
+        "provisions that are irrelevant to the question.\n"
+        "4. CITATION STYLE: no parenthetical citations. Write the provision in **bold** inside the sentence, for example "
+        "**Section 48 of the Code of Criminal Procedure (CrPC)** or **Article 10 of the Constitution of Pakistan**. "
+        "Never append sub-clause numbers like 'Article 14(2)'.\n"
+        "5. FORMAT: ONLY plain text and **bold**. NEVER use '#', blockquotes, '---', italics, or a citations list.\n"
+    )
+    if detailed:
+        rules += (
+            "6. STRUCTURE (use exactly these bold headings):\n**Most Relevant**\nThe single most relevant provision in bold "
+            "with a clear explanation (3-4 sentences) in simple English.\n**Supported Articles**\nOther relevant provisions in "
+            "bold, each with a short explanation of how it relates. If there are none, write: No other directly relevant provision found.\n"
+        )
+    else:
+        rules += (
+            "6. LENGTH: short, clear and direct in simple English (3-5 sentences). Start with 'Yes.' or 'No.' (or "
+            "'Generally, no.') for yes/no questions ('Can...', 'Does...', 'Is...'), then explain with the exact provision.\n"
+        )
+    rules += (
+        "7. LAST LINE (mandatory when answering): on a new final line write exactly: SOURCES: key:number; key:number "
+        "using the book_key of the excerpt and the provision number you relied on, e.g. SOURCES: crpc:48; constitution:10"
+    )
+
+    user_prompt = f"Excerpts:\n{context_text}\n\nQuestion: {query}"
+
+    reply_text = ""
+    sources_line = ""
+    for attempt in range(2):
+        content = call_llm(rules, user_prompt, max_tokens)
+        if not content:
+            return {"status": "error", "reply": BUSY_MSG, "reference": None}
+        if content.strip().upper().startswith("OUT_OF_SCOPE") or "OUT_OF_SCOPE" in content[:60]:
+            return {"status": "out", "reply": OUT_OF_SCOPE_MSG, "reference": None}
+
+        m = re.search(r"(?im)^\s*\**\s*SOURCES?\s*\**\s*:\s*(.+)$", content)
+        sources_line = m.group(1) if m else ""
+        body = re.sub(r"(?im)^\s*\**\s*SOURCES?\s*\**\s*:.*$", "", content).strip()
+        reply_text = normalize_reply_formatting(body)
+
+        cites = extract_citations(reply_text, "")
+        bad = [f"{'Article' if k == 'constitution' else 'Section'} {n}" for k, n in cites if not heading_exists(n, k, passages)]
+        if not bad:
+            break
+        user_prompt = (
+            f"Excerpts:\n{context_text}\n\nQuestion: {query}\n\n"
+            f"WARNING: your previous answer cited {', '.join(bad)}, which does NOT appear in the excerpts. "
+            "Answer again citing only provisions whose number actually appears in the excerpts and describe each "
+            "provision only by what its own text says. If the excerpts do not contain the answer, output OUT_OF_SCOPE."
+        )
+
+    refs = []
+    for kind, num in extract_citations(reply_text, sources_line):
+        if heading_exists(num, kind, passages):
+            name = book_display(kind, next((p["book_title"] for p in passages if book_kind(p["book_title"]) == kind), "Legal Reference"))
+            label = "Article" if kind == "constitution" else "Section"
+            refs.append(f"{name} — {label} {num}")
+    reference = " | ".join(dict.fromkeys(refs)) if refs else None
+    return {"status": "ok", "reply": reply_text, "reference": reference}
 
 
 @app.get("/health")
@@ -511,49 +553,39 @@ def health_check():
     }
 
 
+GREETING_RE = re.compile(
+    r"^\s*(hi|hello|hey|salam|assalam[\s-]?o[\s-]?alaikum|good (morning|evening|afternoon)|thanks|thank you)\W*$",
+    re.IGNORECASE,
+)
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def chat_endpoint(payload: ChatRequest):
     query = (payload.query or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="Query text cannot be empty.")
 
+    if GREETING_RE.match(query):
+        return ChatResponse(
+            reply="Hello! Ask me any question about the Constitution of Pakistan (1973) or the Code of Criminal Procedure (CrPC 1898), and I will answer from those books.",
+            reference=None,
+            disclaimer=SHORT_DISCLAIMER,
+        )
+
     if collection is None or model is None:
         raise HTTPException(status_code=503, detail="Backend services are starting up.")
 
     try:
-        top_passages = hybrid_retrieve(query, top_k=8)
+        passages = hybrid_retrieve(query, top_k=6)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"ChromaDB query failed: {exc}")
 
-    if not top_passages or top_passages[0]["final_score"] < 0.28:
-        return ChatResponse(
-            reply=OUT_OF_SCOPE_MSG,
-            reference=None,
-            disclaimer=SHORT_DISCLAIMER,
-        )
+    if not passages or passages[0].get("best_vec", 0.0) < 0.2:
+        return ChatResponse(reply=OUT_OF_SCOPE_MSG, reference=None, disclaimer=SHORT_DISCLAIMER)
 
-    references = []
-    for p in top_passages[:3]:
-        prov = f" (Art./Sec. {p['provisions']})" if p.get("provisions") else ""
-        references.append(f"{p['book_title']}.pdf — Part {p['chunk_index'] + 1}{prov}")
-
-    llm_reply = generate_with_llm(query, top_passages)
-    if llm_reply and llm_reply.strip() == "OUT_OF_SCOPE":
-        return ChatResponse(
-            reply=OUT_OF_SCOPE_MSG,
-            reference=None,
-            disclaimer=SHORT_DISCLAIMER,
-        )
-
-    if not llm_reply:
-        return ChatResponse(
-            reply=OUT_OF_SCOPE_MSG,
-            reference=None,
-            disclaimer=SHORT_DISCLAIMER,
-        )
-
+    result = generate_with_llm(query, passages)
     return ChatResponse(
-        reply=llm_reply,
-        reference=" | ".join(references),
+        reply=result["reply"],
+        reference=result["reference"],
         disclaimer=SHORT_DISCLAIMER,
     )
