@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../supabase/supabaseClient';
 import { Mail, Lock, AlertCircle, Gavel, Eye, EyeOff, X, Check } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
+import { useTheme } from '../context/ThemeContext';
 
 const LAST_ACCOUNT_STORAGE_KEY = 'legal_ai_advisor_last_account_v1';
 
@@ -21,6 +23,10 @@ const saveLastAccountInfo = (account) => {
 };
 
 export default function Login() {
+  const { lang } = useLanguage();
+  const { isDark } = useTheme();
+  const isUr = lang === 'ur';
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -46,30 +52,17 @@ export default function Login() {
     setLoading(true);
     setError(null);
 
-    const trimmedEmail = email.trim();
+    const trimmedEmail = email.trim().toLowerCase();
 
     // 1. Check if email/password is empty or malformed (e.g., "qasimaliarain")
     if (!trimmedEmail || !password || !validateEmailFormat(trimmedEmail)) {
-      setError('Invalid login credentials');
+      setError(isUr ? 'غلط لاگ ان تفصیلات' : 'Invalid login credentials');
       setLoading(false);
       return;
     }
 
     try {
-      // 2. Check if email exists in public.profiles first
-      const { data: profileCheck, error: lookupError } = await supabase
-        .from('profiles')
-        .select('email')
-        .ilike('email', trimmedEmail)
-        .maybeSingle();
-
-      if (!lookupError && !profileCheck) {
-        setError('Incorrect email');
-        setLoading(false);
-        return;
-      }
-
-      // 3. Attempt password sign-in
+      // 2. Attempt password sign-in directly against Supabase Auth
       const { data, error: loginError } = await supabase.auth.signInWithPassword({
         email: trimmedEmail,
         password,
@@ -78,9 +71,13 @@ export default function Login() {
       if (loginError) {
         const msg = loginError.message.toLowerCase();
         if (msg.includes('invalid login credentials') || msg.includes('invalid grant')) {
-          setError('Incorrect password');
+          setError(isUr ? 'غلط ای میل یا پاس ورڈ' : 'Incorrect email or password');
         } else if (msg.includes('email not confirmed')) {
-          setError('Please confirm your email address before logging in.');
+          setError(
+            isUr
+              ? 'براہ کرم لاگ ان کرنے سے پہلے اپنا ای میل ایڈریس تصدیق کریں۔'
+              : 'Please confirm your email address before logging in.'
+          );
         } else {
           setError(loginError.message);
         }
@@ -91,7 +88,7 @@ export default function Login() {
         navigate('/chat');
       }
     } catch (err) {
-      setError('An unexpected error occurred during login.');
+      setError(isUr ? 'لاگ ان کے دوران ایک غیر متوقع خرابی پیش آئی۔' : 'An unexpected error occurred during login.');
       setLoading(false);
     }
   };
@@ -102,10 +99,10 @@ export default function Login() {
     setResetError(null);
     setResetMessage(null);
 
-    const trimmedResetEmail = resetEmail.trim();
+    const trimmedResetEmail = resetEmail.trim().toLowerCase();
 
     if (!validateEmailFormat(trimmedResetEmail)) {
-      setResetError('Please enter a valid email address.');
+      setResetError(isUr ? 'براہ کرم ایک درست ای میل ایڈریس درج کریں۔' : 'Please enter a valid email address.');
       setResetLoading(false);
       return;
     }
@@ -118,17 +115,26 @@ export default function Login() {
       if (resetErr) {
         setResetError(resetErr.message);
       } else {
-        setResetMessage('Password reset link sent! Check your inbox.');
+        setResetMessage(
+          isUr
+            ? 'پاس ورڈ ری سیٹ لنک بھیج دیا گیا ہے! اپنا ان باکس چیک کریں۔'
+            : 'Password reset link sent! Check your inbox.'
+        );
       }
     } catch (err) {
-      setResetError('Failed to send password reset email.');
+      setResetError(isUr ? 'پاس ورڈ ری سیٹ ای میل بھیجنے میں ناکامی ہوئی۔' : 'Failed to send password reset email.');
     } finally {
       setResetLoading(false);
     }
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 text-white">
+    <div
+      dir={isUr ? 'rtl' : 'ltr'}
+      className={`flex min-h-screen items-center justify-center px-4 transition-colors ${
+        isDark ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-900'
+      }`}
+    >
       {/* Inline style to hide browser native password reveal icons */}
       <style>{`
         input::-ms-reveal,
@@ -137,15 +143,23 @@ export default function Login() {
         }
       `}</style>
 
-      <div className="w-full max-w-md rounded-2xl bg-slate-900 p-8 border border-slate-800 shadow-2xl">
+      <div
+        className={`w-full max-w-md rounded-2xl p-8 border shadow-2xl ${
+          isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+        }`}
+      >
         <div className="flex justify-center mb-4">
           <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl">
             <Gavel className="w-6 h-6" />
           </div>
         </div>
         
-        <h2 className="text-2xl font-bold mb-2 text-center">Welcome Back</h2>
-        <p className="text-xs text-slate-400 text-center mb-6">Log in to your Legal AI account</p>
+        <h2 className="text-2xl font-bold mb-2 text-center">
+          {isUr ? 'خوش آمدید' : 'Welcome Back'}
+        </h2>
+        <p className={`text-xs text-center mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+          {isUr ? 'اپنے لیگل اے آئی اکاؤنٹ میں لاگ ان کریں' : 'Log in to your Legal AI account'}
+        </p>
         
         {error && (
           <div className="mb-4 rounded-xl bg-red-500/10 p-3 text-xs text-red-400 border border-red-500/20 flex items-start gap-2">
@@ -156,16 +170,22 @@ export default function Login() {
 
         <form onSubmit={handleLogin} noValidate className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Email Address</label>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              {isUr ? 'ای میل ایڈریس' : 'Email Address'}
+            </label>
             <div className="relative">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+              <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                 <Mail className="w-4 h-4" />
               </span>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                  isUr ? 'pr-10 pl-4' : 'pl-10 pr-4'
+                } ${
+                  isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                }`}
                 placeholder="name@example.com"
               />
             </div>
@@ -173,7 +193,9 @@ export default function Login() {
 
           <div>
             <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Password</label>
+              <label className={`block text-xs font-semibold uppercase tracking-wider ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                {isUr ? 'پاس ورڈ' : 'Password'}
+              </label>
               <button
                 type="button"
                 onClick={() => {
@@ -184,24 +206,30 @@ export default function Login() {
                 }}
                 className="text-[11px] text-emerald-400 hover:underline cursor-pointer font-medium"
               >
-                Forgot password?
+                {isUr ? 'پاس ورڈ بھول گئے؟' : 'Forgot password?'}
               </button>
             </div>
             <div className="relative">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+              <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                 <Lock className="w-4 h-4" />
               </span>
               <input
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-10 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                  isUr ? 'pr-10 pl-10' : 'pl-10 pr-10'
+                } ${
+                  isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                }`}
                 placeholder="••••••••"
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-white cursor-pointer"
+                className={`absolute inset-y-0 flex items-center text-slate-400 hover:text-white cursor-pointer ${
+                  isUr ? 'left-0 pl-3' : 'right-0 pr-3'
+                }`}
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -213,30 +241,45 @@ export default function Login() {
             disabled={loading}
             className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 py-3 font-bold text-xs transition-colors disabled:opacity-50 cursor-pointer shadow-lg shadow-emerald-500/10"
           >
-            {loading ? 'Logging in...' : 'Log In'}
+            {loading
+              ? (isUr ? 'لاگ ان ہو رہا ہے...' : 'Logging in...')
+              : (isUr ? 'لاگ ان کریں' : 'Log In')}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-slate-400">
-          Don't have an account?{' '}
-          <Link to="/signup" className="text-emerald-400 hover:underline font-semibold">Sign up</Link>
+        <p className={`mt-6 text-center text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+          {isUr ? 'اکاؤنٹ نہیں ہے؟' : "Don't have an account?"}{' '}
+          <Link to="/signup" className="text-emerald-400 hover:underline font-semibold">
+            {isUr ? 'سائن اپ کریں' : 'Sign up'}
+          </Link>
         </p>
       </div>
 
       {/* Forgot Password Modal */}
       {showForgotPasswordModal && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="border rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 relative bg-slate-900 border-slate-800 text-white">
+          <div
+            dir={isUr ? 'rtl' : 'ltr'}
+            className={`border rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 relative ${
+              isDark ? 'bg-slate-900 border-slate-800 text-white' : 'bg-white border-slate-200 text-slate-900'
+            }`}
+          >
             <button
               onClick={() => setShowForgotPasswordModal(false)}
-              className="absolute top-4 right-4 p-1 rounded-lg transition cursor-pointer text-slate-400 hover:text-white hover:bg-slate-800"
+              className={`absolute top-4 p-1 rounded-lg transition cursor-pointer ${
+                isUr ? 'left-4' : 'right-4'
+              } ${
+                isDark ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+              }`}
             >
               <X className="w-5 h-5" />
             </button>
 
-            <h3 className="text-lg font-bold">Reset Password</h3>
-            <p className="text-xs text-slate-400 leading-relaxed">
-              Enter your email address below and we will send you a secure link to reset your password.
+            <h3 className="text-lg font-bold">{isUr ? 'پاس ورڈ ری سیٹ کریں' : 'Reset Password'}</h3>
+            <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              {isUr
+                ? 'نیچے اپنا ای میل ایڈریس درج کریں اور ہم آپ کو پاس ورڈ ری سیٹ کرنے کے لیے ایک محفوظ لنک بھیجیں گے۔'
+                : 'Enter your email address below and we will send you a secure link to reset your password.'}
             </p>
 
             {resetError && (
@@ -255,9 +298,11 @@ export default function Login() {
 
             <form onSubmit={handleForgotPassword} className="space-y-4 pt-2">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Email Address</label>
+                <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {isUr ? 'ای میل ایڈریس' : 'Email Address'}
+                </label>
                 <div className="relative">
-                  <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+                  <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                     <Mail className="w-4 h-4" />
                   </span>
                   <input
@@ -265,7 +310,11 @@ export default function Login() {
                     required
                     value={resetEmail}
                     onChange={(e) => setResetEmail(e.target.value)}
-                    className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                    className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                      isUr ? 'pr-10 pl-4' : 'pl-10 pr-4'
+                    } ${
+                      isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
                     placeholder="name@example.com"
                   />
                 </div>
@@ -275,16 +324,20 @@ export default function Login() {
                 <button
                   type="button"
                   onClick={() => setShowForgotPasswordModal(false)}
-                  className="flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold transition cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200"
+                  className={`flex-1 py-2.5 px-4 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                    isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                  }`}
                 >
-                  Cancel
+                  {isUr ? 'منسوخ کریں' : 'Cancel'}
                 </button>
                 <button
                   type="submit"
                   disabled={resetLoading}
                   className="flex-1 py-2.5 px-4 bg-emerald-500 hover:bg-emerald-600 text-slate-950 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
                 >
-                  {resetLoading ? 'Sending...' : 'Send Reset Link'}
+                  {resetLoading
+                    ? (isUr ? 'بھیجا جا رہا ہے...' : 'Sending...')
+                    : (isUr ? 'ری سیٹ لنک بھیجیں' : 'Send Reset Link')}
                 </button>
               </div>
             </form>
