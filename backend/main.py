@@ -77,8 +77,8 @@ model_cooldown: Dict[str, float] = {}  # "provider:model" -> unix time until whi
 # Messages (English / Urdu / Roman Urdu)
 # ---------------------------------------------------------------------------
 SHORT_DISCLAIMER = (
-    "Disclaimer: For prototype informational purposes only; not formal legal advice. "
-    "This is only for general guidance, not professional legal support."
+    "Disclaimer: This is only for general guidance, not a professional legal support. "
+   
 )
 
 OUT_OF_SCOPE_MSG = (
@@ -127,8 +127,8 @@ LANGS: Dict[str, dict] = {
             "yourself. The excerpts are in English: understand them and explain their meaning in Urdu."
         ),
         "disclaimer": (
-            "دستبرداری: یہ صرف تجرباتی (پروٹوٹائپ) معلوماتی مقاصد کے لیے ہے اور باقاعدہ قانونی مشورہ نہیں ہے۔ "
-            "یہ صرف عمومی رہنمائی ہے، پیشہ ورانہ قانونی معاونت نہیں۔"
+            "دستبرداری:یہ صرف عمومی رہنمائی ہے، پیشہ ورانہ قانونی معاونت نہیں۔ "
+     
         ),
         "out_of_scope": (
             "یہ سوال میرے انڈیکس شدہ قانونی مواد کے دائرہ کار سے باہر ہے یا فراہم کردہ اقتباسات میں اس کا واضح جواب موجود نہیں۔ "
@@ -169,8 +169,7 @@ LANGS: Dict[str, dict] = {
             "The excerpts are in English: understand them and explain their meaning in Roman Urdu."
         ),
         "disclaimer": (
-            "Disclaimer: Yeh sirf prototype maloomati maqasid ke liye hai aur baqaida qanooni mashwara nahi hai. "
-            "Yeh sirf umoomi rehnumai hai, peshawarana qanooni madad nahi."
+            "Disclaimer: Yeh sirf umoomi rehnumai hai, peshawarana qanooni madad nahi."
         ),
         "out_of_scope": (
             "Yeh sawal mere indexed qanooni zakhire ke dayre se bahar hai ya faraham kiye gaye iqtebasaat mein iska wazeh jawab mojood nahi. "
