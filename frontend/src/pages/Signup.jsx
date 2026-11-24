@@ -2,8 +2,14 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../supabase/supabaseClient';
 import { User, Mail, Lock, AlertCircle, Eye, EyeOff, Phone, MapPin, Scale } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
+import { useTheme } from '../context/ThemeContext';
 
 export default function Signup() {
+  const { lang } = useLanguage();
+  const { isDark } = useTheme();
+  const isUr = lang === 'ur';
+
   const [role, setRole] = useState('user');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -57,14 +63,18 @@ export default function Signup() {
 
     // 1. Username validation
     if (!validateUsername(username)) {
-      setError('Username must be at least 3 characters long and include letters (cannot be pure numbers).');
+      setError(
+        isUr
+          ? 'صارف نام کم از کم 3 حروف کا ہونا چاہیے اور اس میں حروف تہجی شامل ہوں (صرف اعداد نہیں ہو سکتے)۔'
+          : 'Username must be at least 3 characters long and include letters (cannot be pure numbers).'
+      );
       setLoading(false);
       return;
     }
 
     // 2. Email validation
     if (!validateEmail(email)) {
-      setError('Please enter a valid email address.');
+      setError(isUr ? 'براہ کرم ایک درست ای میل ایڈریس درج کریں۔' : 'Please enter a valid email address.');
       setLoading(false);
       return;
     }
@@ -72,13 +82,13 @@ export default function Signup() {
     // 2b. Lawyer-specific fields validation
     if (role === 'lawyer') {
       if (!validateContactNumber(contactNumber)) {
-        setError('Please enter a valid contact number.');
+        setError(isUr ? 'براہ کرم ایک درست رابطہ نمبر درج کریں۔' : 'Please enter a valid contact number.');
         setLoading(false);
         return;
       }
 
       if (!validateLocation(location)) {
-        setError('Please enter your location or area.');
+        setError(isUr ? 'براہ کرم اپنا مقام یا علاقہ درج کریں۔' : 'Please enter your location or area.');
         setLoading(false);
         return;
       }
@@ -86,14 +96,18 @@ export default function Signup() {
 
     // 3. Password strength validation
     if (!validatePassword(password)) {
-      setError('Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.');
+      setError(
+        isUr
+          ? 'پاس ورڈ کم از کم 8 حروف کا ہونا چاہیے اور اس میں بڑا حرف، چھوٹا حرف، عدد اور خاص علامت شامل ہو۔'
+          : 'Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.'
+      );
       setLoading(false);
       return;
     }
 
     // 4. Confirm password matching
     if (password !== confirmPassword) {
-      setError('Passwords do not match.');
+      setError(isUr ? 'پاس ورڈز مماثل نہیں ہیں۔' : 'Passwords do not match.');
       setLoading(false);
       return;
     }
@@ -123,7 +137,11 @@ export default function Signup() {
 
       // Check if Supabase returned a user with empty identities (indicates email already exists)
       if (data?.user && data.user.identities && data.user.identities.length === 0) {
-        setError('This email is already registered. Please log in instead.');
+        setError(
+          isUr
+            ? 'یہ ای میل پہلے سے رجسٹرڈ ہے۔ براہ کرم لاگ ان کریں۔'
+            : 'This email is already registered. Please log in instead.'
+        );
         setLoading(false);
         return;
       }
@@ -133,9 +151,13 @@ export default function Signup() {
     } catch (err) {
       const msg = err.message || '';
       if (msg.toLowerCase().includes('already registered') || msg.toLowerCase().includes('already exists')) {
-        setError('This email is already registered. Please log in instead.');
+        setError(
+          isUr
+            ? 'یہ ای میل پہلے سے رجسٹرڈ ہے۔ براہ کرم لاگ ان کریں۔'
+            : 'This email is already registered. Please log in instead.'
+        );
       } else {
-        setError(msg || 'An error occurred during sign up.');
+        setError(msg || (isUr ? 'سائن اپ کے دوران ایک خرابی پیش آئی۔' : 'An error occurred during sign up.'));
       }
     } finally {
       setLoading(false);
@@ -143,7 +165,12 @@ export default function Signup() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 text-white">
+    <div
+      dir={isUr ? 'rtl' : 'ltr'}
+      className={`flex min-h-screen items-center justify-center px-4 transition-colors ${
+        isDark ? 'bg-slate-950 text-white' : 'bg-slate-100 text-slate-900'
+      }`}
+    >
       {/* Inline style to hide browser native password reveal icons */}
       <style>{`
         input::-ms-reveal,
@@ -152,9 +179,17 @@ export default function Signup() {
         }
       `}</style>
 
-      <div className="w-full max-w-md rounded-2xl bg-slate-900 p-8 border border-slate-800 shadow-2xl">
-        <h2 className="text-2xl font-bold mb-2 text-center">Create an Account</h2>
-        <p className="text-xs text-slate-400 text-center mb-6">Join Legal AI for smart Pakistani legal advisory</p>
+      <div
+        className={`w-full max-w-md rounded-2xl p-8 border shadow-2xl ${
+          isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+        }`}
+      >
+        <h2 className="text-2xl font-bold mb-2 text-center">
+          {isUr ? 'اکاؤنٹ بنائیں' : 'Create an Account'}
+        </h2>
+        <p className={`text-xs text-center mb-6 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+          {isUr ? 'پاکستانی قانونی مشاورت کے لیے لیگل اے آئی میں شامل ہوں' : 'Join Legal AI for smart Pakistani legal advisory'}
+        </p>
         
         {error && (
           <div className="mb-4 rounded-xl bg-red-500/10 p-3 text-xs text-red-400 border border-red-500/20 flex items-start gap-2">
@@ -165,7 +200,9 @@ export default function Signup() {
 
         <form onSubmit={handleSignup} className="space-y-4">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Account Type</label>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              {isUr ? 'اکاؤنٹ کی قسم' : 'Account Type'}
+            </label>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
@@ -173,11 +210,13 @@ export default function Signup() {
                 className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
                   role === 'user'
                     ? 'bg-emerald-500/15 border-emerald-500 text-emerald-400'
-                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                    : isDark
+                      ? 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                      : 'bg-slate-100 border-slate-300 text-slate-600 hover:text-slate-900'
                 }`}
               >
                 <User className="w-4 h-4" />
-                <span>User</span>
+                <span>{isUr ? 'صارف' : 'User'}</span>
               </button>
               <button
                 type="button"
@@ -185,19 +224,23 @@ export default function Signup() {
                 className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
                   role === 'lawyer'
                     ? 'bg-emerald-500/15 border-emerald-500 text-emerald-400'
-                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                    : isDark
+                      ? 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                      : 'bg-slate-100 border-slate-300 text-slate-600 hover:text-slate-900'
                 }`}
               >
                 <Scale className="w-4 h-4" />
-                <span>Lawyer</span>
+                <span>{isUr ? 'وکیل' : 'Lawyer'}</span>
               </button>
             </div>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Username</label>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              {isUr ? 'صارف نام' : 'Username'}
+            </label>
             <div className="relative">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+              <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                 <User className="w-4 h-4" />
               </span>
               <input
@@ -205,17 +248,25 @@ export default function Signup() {
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                placeholder="e.g Qasim"
+                className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                  isUr ? 'pr-10 pl-4' : 'pl-10 pr-4'
+                } ${
+                  isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                }`}
+                placeholder={isUr ? 'مثلاً قاسم' : 'e.g Qasim'}
               />
             </div>
-            <p className="text-[10px] text-slate-500 mt-1">Must be 3+ chars and include letters.</p>
+            <p className="text-[10px] text-slate-500 mt-1">
+              {isUr ? 'کم از کم 3 حروف کا ہو اور اس میں حروف تہجی شامل ہوں۔' : 'Must be 3+ chars and include letters.'}
+            </p>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Email Address</label>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              {isUr ? 'ای میل ایڈریس' : 'Email Address'}
+            </label>
             <div className="relative">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+              <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                 <Mail className="w-4 h-4" />
               </span>
               <input
@@ -223,7 +274,11 @@ export default function Signup() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                  isUr ? 'pr-10 pl-4' : 'pl-10 pr-4'
+                } ${
+                  isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                }`}
                 placeholder="name@example.com"
               />
             </div>
@@ -232,9 +287,11 @@ export default function Signup() {
           {role === 'lawyer' && (
             <>
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Contact Number</label>
+                <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {isUr ? 'رابطہ نمبر' : 'Contact Number'}
+                </label>
                 <div className="relative">
-                  <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+                  <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                     <Phone className="w-4 h-4" />
                   </span>
                   <input
@@ -242,16 +299,22 @@ export default function Signup() {
                     required
                     value={contactNumber}
                     onChange={(e) => setContactNumber(e.target.value)}
-                    className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                    placeholder="e.g. +92 300 1234567"
+                    className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                      isUr ? 'pr-10 pl-4' : 'pl-10 pr-4'
+                    } ${
+                      isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                    placeholder="+92 300 1234567"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Location / Area</label>
+                <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+                  {isUr ? 'مقام / علاقہ' : 'Location / Area'}
+                </label>
                 <div className="relative">
-                  <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+                  <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                     <MapPin className="w-4 h-4" />
                   </span>
                   <input
@@ -259,8 +322,12 @@ export default function Signup() {
                     required
                     value={location}
                     onChange={(e) => setLocation(e.target.value)}
-                    className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                    placeholder="e.g. Gulberg, Lahore"
+                    className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                      isUr ? 'pr-10 pl-4' : 'pl-10 pr-4'
+                    } ${
+                      isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                    }`}
+                    placeholder={isUr ? 'مثلاً گلبرگ، لاہور' : 'e.g. Gulberg, Lahore'}
                   />
                 </div>
               </div>
@@ -268,9 +335,11 @@ export default function Signup() {
           )}
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Password</label>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              {isUr ? 'پاس ورڈ' : 'Password'}
+            </label>
             <div className="relative">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+              <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                 <Lock className="w-4 h-4" />
               </span>
               <input
@@ -278,24 +347,36 @@ export default function Signup() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-10 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
-                placeholder="Min 8 chars, Upper, Lower, Number, Symbol"
+                className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                  isUr ? 'pr-10 pl-10' : 'pl-10 pr-10'
+                } ${
+                  isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                }`}
+                placeholder={isUr ? 'کم از کم 8 حروف، بڑا/چھوٹا حرف، عدد، علامت' : 'Min 8 chars, Upper, Lower, Number, Symbol'}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-white cursor-pointer"
+                className={`absolute inset-y-0 flex items-center text-slate-400 hover:text-white cursor-pointer ${
+                  isUr ? 'left-0 pl-3' : 'right-0 pr-3'
+                }`}
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-            <p className="text-[10px] text-slate-500 mt-1">Must contain 8+ chars with uppercase, lowercase, number & symbol.</p>
+            <p className="text-[10px] text-slate-500 mt-1">
+              {isUr
+                ? 'کم از کم 8 حروف میں بڑا حرف، چھوٹا حرف، عدد اور خاص علامت شامل ہو۔'
+                : 'Must contain 8+ chars with uppercase, lowercase, number & symbol.'}
+            </p>
           </div>
 
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Confirm Password</label>
+            <label className={`block text-xs font-semibold uppercase tracking-wider mb-1 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+              {isUr ? 'پاس ورڈ کی تصدیق کریں' : 'Confirm Password'}
+            </label>
             <div className="relative">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+              <span className={`absolute inset-y-0 flex items-center text-slate-500 ${isUr ? 'right-0 pr-3' : 'left-0 pl-3'}`}>
                 <Lock className="w-4 h-4" />
               </span>
               <input
@@ -303,13 +384,19 @@ export default function Signup() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-10 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                className={`w-full rounded-xl border py-2.5 text-xs focus:outline-none focus:border-emerald-500 transition-colors ${
+                  isUr ? 'pr-10 pl-10' : 'pl-10 pr-10'
+                } ${
+                  isDark ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-300 text-slate-900'
+                }`}
                 placeholder="••••••••"
               />
               <button
                 type="button"
                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                className="absolute inset-y-0 right-0 flex items-center pr-3 text-slate-400 hover:text-white cursor-pointer"
+                className={`absolute inset-y-0 flex items-center text-slate-400 hover:text-white cursor-pointer ${
+                  isUr ? 'left-0 pl-3' : 'right-0 pr-3'
+                }`}
               >
                 {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -321,13 +408,17 @@ export default function Signup() {
             disabled={loading}
             className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-600 text-slate-950 py-3 font-bold text-xs transition-colors disabled:opacity-50 cursor-pointer shadow-lg shadow-emerald-500/10"
           >
-            {loading ? 'Creating Account & Logging In...' : 'Sign Up'}
+            {loading
+              ? (isUr ? 'اکاؤنٹ بن رہا ہے اور لاگ ان ہو رہا ہے...' : 'Creating Account & Logging In...')
+              : (isUr ? 'سائن اپ کریں' : 'Sign Up')}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-slate-400">
-          Already have an account?{' '}
-          <Link to="/login" className="text-emerald-400 hover:underline font-semibold">Log in</Link>
+        <p className={`mt-6 text-center text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
+          {isUr ? 'پہلے سے اکاؤنٹ موجود ہے؟' : 'Already have an account?'}{' '}
+          <Link to="/login" className="text-emerald-400 hover:underline font-semibold">
+            {isUr ? 'لاگ ان کریں' : 'Log in'}
+          </Link>
         </p>
       </div>
     </div>
