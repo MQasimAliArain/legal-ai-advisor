@@ -1,8 +1,9 @@
 import math
 import os
 import re
+import threading
 import time
-from collections import Counter
+from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -24,22 +25,60 @@ CHROMA_PORT = int(os.getenv("CHROMA_PORT", "8000"))
 COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "legal_book_chunks")
 EMBED_MODEL_NAME = os.getenv("EMBED_MODEL_NAME", "sentence-transformers/all-MiniLM-L6-v2")
 
+
+def _csv(value: Optional[str]) -> List[str]:
+    return [m.strip() for m in (value or "").split(",") if m.strip()]
+
+
+def _dedupe(items: List[str]) -> List[str]:
+    seen = set()
+    out = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# LLM configuration
+# ---------------------------------------------------------------------------
+# Provider 1: Groq (or any OpenAI-compatible endpoint set through LLM_BASE_URL)
 LLM_API_KEY = (os.getenv("GROQ_API_KEY") or os.getenv("LLM_API_KEY") or "").strip()
 LLM_BASE_URL = (
     os.getenv("LLM_BASE_URL")
     or ("https://api.groq.com/openai/v1" if LLM_API_KEY else "")
 ).strip()
 LLM_MODEL = (os.getenv("LLM_MODEL") or "openai/gpt-oss-120b").strip()
-LLM_FALLBACK_MODELS = [
-    m.strip()
-    for m in (os.getenv("LLM_FALLBACK_MODELS") or "llama-3.3-70b-versatile,openai/gpt-oss-20b").split(",")
-    if m.strip()
-]
-last_llm_error: str = ""
+LLM_FALLBACK_MODELS = _csv(os.getenv("LLM_FALLBACK_MODELS") or "llama-3.3-70b-versatile,openai/gpt-oss-20b")
+# Extra Groq models are ALWAYS appended (even if Railway still has old env values) because
+# every Groq model has its own separate free quota.
+LLM_EXTRA_MODELS = _csv(os.getenv("LLM_EXTRA_MODELS") or "meta-llama/llama-4-scout-17b-16e-instruct")
+# Small/cheap models used for the short "translate + rewrite search query" step to save quota.
+LLM_LIGHT_MODELS = _csv(os.getenv("LLM_LIGHT_MODELS") or "llama-3.1-8b-instant,openai/gpt-oss-20b")
 
+# Provider 2: Google Gemini (free tier, much larger token limits than Groq free)
+GEMINI_API_KEY = (os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "").strip()
+GEMINI_BASE_URL = (
+    os.getenv("GEMINI_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta/openai"
+).strip()
+GEMINI_MODELS = _csv(os.getenv("GEMINI_MODELS") or "gemini-2.5-flash,gemini-2.5-flash-lite")
+GEMINI_LIGHT_MODELS = _csv(os.getenv("GEMINI_LIGHT_MODELS") or "gemini-2.5-flash-lite")
+# "gemini_first" (default, only matters when both keys are set) or "groq_first"
+LLM_PRIORITY = (os.getenv("LLM_PRIORITY") or "gemini_first").strip().lower()
+
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "45"))
+LLM_MAX_WAIT_SECONDS = float(os.getenv("LLM_MAX_WAIT_SECONDS", "8"))
+
+last_llm_error: str = ""
+model_cooldown: Dict[str, float] = {}  # "provider:model" -> unix time until which the model is skipped
+
+# ---------------------------------------------------------------------------
+# Messages (English / Urdu / Roman Urdu)
+# ---------------------------------------------------------------------------
 SHORT_DISCLAIMER = (
-    "Disclaimer: This is only for general guidance, not professional legal support. "
-   
+    "Disclaimer: For prototype informational purposes only; not formal legal advice. "
+    "This is only for general guidance, not professional legal support."
 )
 
 OUT_OF_SCOPE_MSG = (
@@ -47,10 +86,120 @@ OUT_OF_SCOPE_MSG = (
     "My current knowledge base only includes the Constitution of the Islamic Republic of Pakistan (1973) and the Code of Criminal Procedure (CrPC 1898)—other laws (such as the Pakistan Penal Code or civil statutes) are not indexed here."
 )
 
-BUSY_MSG = "The answer service is temporarily busy. Please send your question again in a few seconds."
-
 CONST_NAME = "Constitution of the Islamic Republic of Pakistan, 1973"
 CRPC_NAME = "Code of Criminal Procedure (CrPC), 1898"
+
+LANGS: Dict[str, dict] = {
+    "english": {
+        "simple_name": "English",
+        "instruction": "Always respond strictly in English.",
+        "disclaimer": SHORT_DISCLAIMER,
+        "out_of_scope": OUT_OF_SCOPE_MSG,
+        "greeting": (
+            "Hello! Ask me any question about the Constitution of Pakistan (1973) or the Code of Criminal "
+            "Procedure (CrPC 1898), and I will answer from those books."
+        ),
+        "fallback_intro": "Here are the most relevant passages I found in the indexed law for your question:",
+        "most_relevant": "Most Relevant",
+        "supported": "Supported Articles",
+        "no_other": "No other directly relevant provision found.",
+        "yes": "Yes.",
+        "no": "No.",
+        "generally_no": "Generally, no.",
+        # names / labels used for references and citations
+        "const_name": CONST_NAME,
+        "crpc_name": CRPC_NAME,
+        "law_short_const": "Constitution of Pakistan",
+        "law_short_crpc": "Code of Criminal Procedure (CrPC)",
+        "article_label": "Article",
+        "section_label": "Section",
+        "of_article": "of",
+        "of_section": "of",
+    },
+    "urdu": {
+        "simple_name": "Urdu",
+        "instruction": (
+            "The user wrote in Urdu. Write your ENTIRE answer in clear, simple Urdu using Urdu script only "
+            "(do not use Roman/Latin letters for Urdu words). The only exception: write every legal citation EXACTLY "
+            "in this English template, with nothing added or translated around it, because the system verifies it and then "
+            "converts it to Urdu automatically: **Section 48 of the Code of Criminal Procedure (CrPC)** or "
+            "**Article 12 of the Constitution of Pakistan** (Latin digits). Never write the words 'دفعہ' or 'آرٹیکل' "
+            "yourself. The excerpts are in English: understand them and explain their meaning in Urdu."
+        ),
+        "disclaimer": (
+            "دستبرداری: یہ صرف تجرباتی (پروٹوٹائپ) معلوماتی مقاصد کے لیے ہے اور باقاعدہ قانونی مشورہ نہیں ہے۔ "
+            "یہ صرف عمومی رہنمائی ہے، پیشہ ورانہ قانونی معاونت نہیں۔"
+        ),
+        "out_of_scope": (
+            "یہ سوال میرے انڈیکس شدہ قانونی مواد کے دائرہ کار سے باہر ہے یا فراہم کردہ اقتباسات میں اس کا واضح جواب موجود نہیں۔ "
+            "میرے موجودہ علمی ذخیرے میں صرف اسلامی جمہوریہ پاکستان کا آئین (1973) اور مجموعہ ضابطہ فوجداری "
+            "(CrPC 1898) شامل ہیں۔ دیگر قوانین (مثلاً مجموعہ تعزیراتِ پاکستان یا دیوانی قوانین) یہاں انڈیکس نہیں کیے گئے۔"
+        ),
+        "greeting": (
+            "السلام علیکم! آپ مجھ سے پاکستان کے آئین (1973) یا مجموعہ ضابطہ فوجداری (CrPC 1898) کے بارے میں "
+            "کوئی بھی سوال پوچھ سکتے ہیں، میں انہی کتابوں سے جواب دوں گا۔"
+        ),
+        "fallback_intro": (
+            "آپ کے سوال سے سب سے زیادہ متعلقہ اقتباسات، جو انڈیکس شدہ قانون میں ملے، درج ذیل ہیں (اصل متن انگریزی میں ہے):"
+        ),
+        "most_relevant": "سب سے متعلقہ",
+        "supported": "دیگر متعلقہ احکامات",
+        "no_other": "کوئی اور براہِ راست متعلقہ حکم نہیں ملا۔",
+        "yes": "جی ہاں۔",
+        "no": "نہیں۔",
+        "generally_no": "عمومی طور پر نہیں۔",
+        "const_name": "آئینِ اسلامی جمہوریہ پاکستان، 1973",
+        "crpc_name": "مجموعہ ضابطہ فوجداری (CrPC)، 1898",
+        "law_short_const": "آئینِ پاکستان",
+        "law_short_crpc": "مجموعہ ضابطہ فوجداری (CrPC)",
+        "article_label": "آرٹیکل",
+        "section_label": "دفعہ",
+        "of_article": "کا",
+        "of_section": "کی",
+    },
+    "roman_urdu": {
+        "simple_name": "Roman Urdu",
+        "instruction": (
+            "The user wrote in Roman Urdu (Urdu written in English/Latin letters, the way Pakistanis text, for example "
+            "'Yeh dafa kehti hai ke ...'). Write your ENTIRE answer in simple Roman Urdu using Latin letters only "
+            "(do not use Urdu/Arabic script). The only exception: write every legal citation EXACTLY in this English "
+            "template, with nothing added or translated around it, because the system verifies it and then converts it to "
+            "Roman Urdu automatically: **Section 48 of the Code of Criminal Procedure (CrPC)** or "
+            "**Article 12 of the Constitution of Pakistan**. Never write the word 'Dafa' yourself. "
+            "The excerpts are in English: understand them and explain their meaning in Roman Urdu."
+        ),
+        "disclaimer": (
+            "Disclaimer: Yeh sirf prototype maloomati maqasid ke liye hai aur baqaida qanooni mashwara nahi hai. "
+            "Yeh sirf umoomi rehnumai hai, peshawarana qanooni madad nahi."
+        ),
+        "out_of_scope": (
+            "Yeh sawal mere indexed qanooni zakhire ke dayre se bahar hai ya faraham kiye gaye iqtebasaat mein iska wazeh jawab mojood nahi. "
+            "Mera mojooda knowledge base sirf Islami Jamhuriya Pakistan ka Aaeen (1973) aur Code of Criminal Procedure (CrPC 1898) "
+            "par mushtamil hai. Dusre qawaneen (jaise Pakistan Penal Code ya diwani qawaneen) yahan index nahi kiye gaye."
+        ),
+        "greeting": (
+            "Assalam o Alaikum! Aap mujh se Pakistan ke Aaeen (1973) ya Code of Criminal Procedure (CrPC 1898) ke bare mein "
+            "koi bhi sawal pooch sakte hain, main inhi kitabon se jawab doon ga."
+        ),
+        "fallback_intro": (
+            "Aap ke sawal se sab se zyada mutaliqa iqtebasaat jo indexed qanoon mein milay, yeh hain (asal matn English mein hai):"
+        ),
+        "most_relevant": "Sab Se Mutaliqa",
+        "supported": "Dusre Mutaliqa Ahkamat",
+        "no_other": "Koi aur seedha mutaliqa hukm nahi mila.",
+        "yes": "Ji haan.",
+        "no": "Nahi.",
+        "generally_no": "Aam tor par nahi.",
+        "const_name": "Aaeen-e-Islami Jamhuriya Pakistan, 1973",
+        "crpc_name": "Majmua Zabta Faujdari (CrPC), 1898",
+        "law_short_const": "Aaeen-e-Pakistan",
+        "law_short_crpc": "Majmua Zabta Faujdari (CrPC)",
+        "article_label": "Article",
+        "section_label": "Dafa",
+        "of_article": "ka",
+        "of_section": "ki",
+    },
+}
 
 STOP_WORDS = {
     "what", "is", "the", "a", "an", "of", "in", "on", "for", "to", "and",
@@ -59,6 +208,158 @@ STOP_WORDS = {
     "this", "that", "these", "those", "it", "its", "as", "at", "into",
     "someone", "person", "they", "them", "their",
 }
+
+# ---------------------------------------------------------------------------
+# Language detection (English / Urdu / Roman Urdu)
+# ---------------------------------------------------------------------------
+URDU_CHAR_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF]")
+
+# Common Roman Urdu words that are NOT normal English words.
+ROMAN_URDU_WORDS = {
+    "kya", "hai", "hain", "hoon", "hun", "tha", "thi", "the_", "hoga", "hogi", "honge", "hota", "hoti", "hote",
+    "ka", "ki", "ke", "ko", "se", "mein", "mei", "pe", "par_", "ne", "kar", "kare", "karna", "karne", "karni",
+    "kr", "krna", "kiya", "kia", "kiye", "diya", "liya", "gaya", "gayi", "gaye", "raha", "rahi", "rahe",
+    "nahi", "nahin", "nai", "koi", "kisi", "kuch", "sab", "aur", "agar", "lekin", "magar", "bhi", "sirf",
+    "mujhe", "mera", "meri", "mere", "hum", "humein", "hamen", "mujh", "tum", "aap", "woh", "wo", "yeh", "ye",
+    "uska", "uski", "uske", "unka", "unki", "unke", "iska", "iski", "iske", "apna", "apni", "apne",
+    "kaise", "kese", "kab", "kahan", "kyun", "kyu", "kon", "kaun", "kitna", "kitni", "kitne",
+    "sakta", "sakti", "sakte", "chahiye", "chahie", "milta", "milti", "milte", "wala", "wali", "wale",
+    "liye", "lye", "jab", "tab", "jo", "batao", "batain", "bataiye", "btao", "bataen", "samjhao",
+    "shukriya", "shukria", "jawab", "sawal", "mushkil", "madad", "kisko", "kiska", "kiski",
+}
+
+GLOSSARY = {
+    "giraftar": "arrest", "giraftari": "arrest", "girftar": "arrest", "girftari": "arrest",
+    "گرفتار": "arrest", "گرفتاری": "arrest",
+    "pulis": "police", "پولیس": "police",
+    "zamanat": "bail", "zamant": "bail", "ضمانت": "bail",
+    "adalat": "court", "عدالت": "court",
+    "muqadma": "case trial", "mukadma": "case trial", "muqadmay": "case trial", "مقدمہ": "case trial",
+    "hirasat": "custody", "حراست": "custody",
+    "qaidi": "prisoner", "قیدی": "prisoner",
+    "jel": "jail", "جیل": "jail",
+    "tashadud": "torture", "تشدد": "torture",
+    "talashi": "search", "تلاشی": "search", "chapa": "search raid", "چھاپہ": "search raid",
+    "aurat": "woman", "aurtain": "women", "khatoon": "woman", "khawateen": "women",
+    "عورت": "woman", "عورتیں": "women", "خاتون": "woman",
+    "huquq": "rights", "haq": "right", "حقوق": "rights", "حق": "right",
+    "azadi": "freedom liberty", "آزادی": "freedom liberty",
+    "mazhab": "religion", "مذہب": "religion",
+    "wakeel": "lawyer legal practitioner", "وکیل": "lawyer legal practitioner",
+    "gawah": "witness", "gawahi": "evidence witness", "گواہ": "witness", "گواہی": "evidence witness",
+    "saza": "punishment", "sazaa": "punishment", "سزا": "punishment",
+    "ilzam": "accused accusation", "الزام": "accused accusation",
+    "mulzim": "accused", "ملزم": "accused",
+    "mujrim": "offender convict", "مجرم": "offender convict",
+    "jurm": "offence", "جرم": "offence",
+    "iqrar": "confession", "اقرار": "confession",
+    "qanoon": "law", "kanoon": "law", "qanun": "law", "قانون": "law",
+    "aaeen": "constitution", "aain": "constitution", "ayeen": "constitution", "aeen": "constitution",
+    "آئین": "constitution", "دستور": "constitution",
+    "shehri": "citizen", "شہری": "citizen",
+    "jaidad": "property", "جائیداد": "property",
+    "tafteesh": "investigation", "tehqiqat": "investigation", "تفتیش": "investigation", "تحقیقات": "investigation",
+    "shikayat": "complaint", "شکایت": "complaint",
+    "insaf": "justice", "انصاف": "justice",
+    "izzat": "dignity", "عزت": "dignity",
+    "ghulami": "slavery", "غلامی": "slavery",
+    "bacha": "child", "bachay": "children", "bachon": "children", "بچہ": "child", "بچے": "children",
+    "hukumat": "government", "حکومت": "government",
+    "sadar": "president", "صدر": "president",
+    "wazir": "minister", "وزیر": "minister",
+    "intikhab": "election", "intikhabat": "election", "انتخابات": "election",
+    "izhar": "expression speech", "اظہار": "expression speech",
+    "bagair": "without", "bina": "without", "بغیر": "without",
+    "ghantay": "hours", "ghante": "hours", "گھنٹے": "hours",
+}
+
+_ROMAN_DETECT_WORDS = {w for w in ROMAN_URDU_WORDS if not w.endswith("_")} | {k for k in GLOSSARY if k.isascii()}
+
+
+def detect_language(text: str) -> str:
+    """Returns 'urdu' (Arabic script), 'roman_urdu' (Urdu in Latin letters) or 'english'."""
+    text = text or ""
+    letters = re.findall(r"[^\W\d_]", text)
+    if not letters:
+        return "english"
+    if len(URDU_CHAR_RE.findall(text)) / len(letters) >= 0.3:
+        return "urdu"
+    words = re.findall(r"[a-z']+", text.lower())
+    if not words:
+        return "english"
+    hits = sum(1 for w in words if w in _ROMAN_DETECT_WORDS)
+    if hits >= 2 or (hits >= 1 and hits / len(words) >= 0.34):
+        return "roman_urdu"
+    return "english"
+
+
+def glossary_translate(text: str) -> str:
+    """Offline last-resort translation of key legal words, used only when no LLM is reachable."""
+    out: List[str] = []
+    for tok in re.findall(r"[\w']+", (text or "").lower()):
+        if tok in GLOSSARY:
+            out.append(GLOSSARY[tok])
+        elif tok.isdigit():
+            out.append(tok)
+        elif tok.isascii() and len(tok) >= 3 and tok not in _ROMAN_DETECT_WORDS:
+            out.append(tok)
+    result = " ".join(out).strip()
+    return result or text
+
+
+# ---------------------------------------------------------------------------
+# Citation localization (English template -> Urdu / Roman Urdu)
+# ---------------------------------------------------------------------------
+_EASTERN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
+_NUM = r"\d{1,3}[A-Z]?(?:\([A-Za-z0-9]+\))*"
+_CONST_PAT = r"Constitution(?:\s+of\s+(?:the\s+Islamic\s+Republic\s+of\s+)?Pakistan)?(?:\s*,?\s*1973)?"
+_CRPC_PAT = r"(?:Code\s+of\s+Criminal\s+Procedure(?:\s*\(\s*CrPC\s*\))?|CrPC)(?:\s*,?\s*1898)?"
+_FULL_CITE_RE = re.compile(
+    rf"(?P<b1>\*\*)?\b(?P<label>Article|Section)\s+(?P<num>{_NUM})(?P<b2>\*\*)?\s+of\s+the\s+"
+    rf"(?:(?P<const>{_CONST_PAT})|(?P<crpc>{_CRPC_PAT}))(?P<b3>\*\*)?",
+    re.IGNORECASE,
+)
+_BARE_CITE_RE = re.compile(rf"\b(Article|Section)\s+({_NUM})", re.IGNORECASE)
+_NATIVE_CITE_RE = re.compile(
+    r"(آرٹیکلز|آرٹیکل|دفعات|دفعہ|Dafaat|Dafaa|Dafat|Dafa)\s*([0-9۰-۹٠-٩]{1,3}[A-Z]?(?:\([A-Za-z0-9]+\))*)",
+    re.IGNORECASE,
+)
+
+
+def to_english_labels(text: str) -> str:
+    """If the model wrote 'دفعہ 48' / 'Dafa 48' / 'آرٹیکل 12' itself, turn it back into 'Section 48' / 'Article 12'
+    so the provision check (which works on English labels) still applies."""
+    def repl(m):
+        word = m.group(1)
+        label = "Article" if word in ("آرٹیکل", "آرٹیکلز") else "Section"
+        return f"{label} {m.group(2).translate(_EASTERN_DIGITS)}"
+    return _NATIVE_CITE_RE.sub(repl, text)
+
+
+def localize_citations(text: str, lang: str) -> str:
+    """Converts the verified English citations in the answer into the user's language."""
+    if lang == "english" or lang not in LANGS:
+        return text
+    cfg = LANGS[lang]
+
+    def label_of(word: str) -> str:
+        return cfg["article_label"] if word.lower() == "article" else cfg["section_label"]
+
+    def of_word(word: str) -> str:
+        return cfg["of_article"] if word.lower() == "article" else cfg["of_section"]
+
+    def full_repl(m):
+        law = cfg["law_short_const"] if m.group("const") else cfg["law_short_crpc"]
+        word = m.group("label")
+        out = f"{law} {of_word(word)} {label_of(word)} {m.group('num')}"
+        if m.group("b1") or m.group("b2") or m.group("b3"):
+            out = f"**{out}**"
+        return out
+
+    text = _FULL_CITE_RE.sub(full_repl, text)
+    text = _BARE_CITE_RE.sub(lambda m: f"{label_of(m.group(1))} {m.group(2)}", text)
+    return text
+
 
 app = FastAPI(title="Legal AI Advisor ChromaDB Backend")
 
@@ -77,6 +378,12 @@ chunk_map: Dict[Tuple[str, int], dict] = {}
 idf_scores: Dict[str, float] = {}
 avg_doc_len: float = 1.0
 
+# Small in-memory answer cache (saves LLM quota on repeated questions)
+CACHE_TTL_SECONDS = 3600
+CACHE_MAX_ITEMS = 300
+_answer_cache: "OrderedDict[Tuple[str, str], Tuple[float, dict]]" = OrderedDict()
+_cache_lock = threading.Lock()
+
 
 class ChatRequest(BaseModel):
     query: str
@@ -87,6 +394,34 @@ class ChatResponse(BaseModel):
     reply: str
     reference: Optional[str] = None
     disclaimer: str = SHORT_DISCLAIMER
+    language: Optional[str] = None
+
+
+def cache_key(lang: str, query: str) -> Tuple[str, str]:
+    return (lang, re.sub(r"\s+", " ", (query or "").lower()).strip())
+
+
+def cache_get(lang: str, query: str) -> Optional[dict]:
+    key = cache_key(lang, query)
+    with _cache_lock:
+        item = _answer_cache.get(key)
+        if not item:
+            return None
+        ts, data = item
+        if time.time() - ts > CACHE_TTL_SECONDS:
+            _answer_cache.pop(key, None)
+            return None
+        _answer_cache.move_to_end(key)
+        return dict(data)
+
+
+def cache_set(lang: str, query: str, data: dict) -> None:
+    key = cache_key(lang, query)
+    with _cache_lock:
+        _answer_cache[key] = (time.time(), dict(data))
+        _answer_cache.move_to_end(key)
+        while len(_answer_cache) > CACHE_MAX_ITEMS:
+            _answer_cache.popitem(last=False)
 
 
 def clean_text(raw: str) -> str:
@@ -185,7 +520,7 @@ def build_bm25_index():
     }
     print(
         f"Loaded {len(corpus_docs)} chunks into Hybrid BM25+Vector index. "
-        f"LLM enabled: {bool(LLM_API_KEY and LLM_BASE_URL)} ({LLM_MODEL})"
+        f"LLM enabled: {llm_enabled()} (chain: {', '.join(chain_names(False)) or 'none'})"
     )
 
 
@@ -253,8 +588,168 @@ def bm25_search(query: str, top_k: int = 25) -> Dict[str, dict]:
     return results
 
 
+# ---------------------------------------------------------------------------
+# LLM provider chain (Gemini + Groq, per-model cooldowns)
+# ---------------------------------------------------------------------------
+def build_chain(light: bool = False) -> List[dict]:
+    """Ordered list of {provider, base_url, api_key, model}. 'light' puts small cheap models first."""
+    groq_chain: List[dict] = []
+    if LLM_API_KEY and LLM_BASE_URL:
+        is_groq = "groq.com" in LLM_BASE_URL
+        main_models = [LLM_MODEL] + LLM_FALLBACK_MODELS + (LLM_EXTRA_MODELS if is_groq else [])
+        models = _dedupe((LLM_LIGHT_MODELS if (light and is_groq) else []) + main_models)
+        provider = "groq" if is_groq else "primary"
+        groq_chain = [
+            {"provider": provider, "base_url": LLM_BASE_URL, "api_key": LLM_API_KEY, "model": m}
+            for m in models
+        ]
+
+    gemini_chain: List[dict] = []
+    if GEMINI_API_KEY:
+        models = _dedupe((GEMINI_LIGHT_MODELS if light else []) + GEMINI_MODELS)
+        gemini_chain = [
+            {"provider": "gemini", "base_url": GEMINI_BASE_URL, "api_key": GEMINI_API_KEY, "model": m}
+            for m in models
+        ]
+
+    if LLM_PRIORITY == "groq_first":
+        return groq_chain + gemini_chain
+    return gemini_chain + groq_chain
+
+
+def chain_names(light: bool = False) -> List[str]:
+    return [f"{e['provider']}:{e['model']}" for e in build_chain(light)]
+
+
 def llm_enabled() -> bool:
-    return bool(LLM_BASE_URL and LLM_API_KEY)
+    return bool((LLM_BASE_URL and LLM_API_KEY) or GEMINI_API_KEY)
+
+
+def _parse_retry_seconds(resp: "httpx.Response") -> float:
+    try:
+        return max(1.0, float(resp.headers.get("retry-after")))
+    except (TypeError, ValueError):
+        pass
+    text = resp.text or ""
+    m_ms = re.search(r"try again in\s+(\d+(?:\.\d+)?)\s*ms", text, re.IGNORECASE)
+    if m_ms:
+        return max(1.0, float(m_ms.group(1)) / 1000.0)
+    m = re.search(r"try again in\s+(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?", text, re.IGNORECASE)
+    if m and any(m.groups()):
+        h, mi, s = (float(x) if x else 0.0 for x in m.groups())
+        return max(1.0, h * 3600 + mi * 60 + s)
+    return 25.0
+
+
+def _set_cooldown(key: str, seconds: float) -> None:
+    model_cooldown[key] = time.time() + max(1.0, min(seconds, 6 * 3600))
+
+
+def _call_single(entry: dict, system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
+    """One request to one model. Sets a cooldown on failure so rate-limited models are skipped next time."""
+    global last_llm_error
+    model_name = entry["model"]
+    key = f"{entry['provider']}:{model_name}"
+    body = {
+        "model": model_name,
+        "temperature": 0.0,
+        "max_tokens": max_tokens,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    lower_name = model_name.lower()
+    if "gpt-oss" in lower_name or lower_name.startswith("gemini"):
+        body["reasoning_effort"] = "low"
+
+    for attempt in range(2):
+        try:
+            with httpx.Client(timeout=LLM_TIMEOUT) as client:
+                resp = client.post(
+                    f"{entry['base_url'].rstrip('/')}/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {entry['api_key']}",
+                    },
+                    json=body,
+                )
+        except Exception as exc:
+            last_llm_error = f"{key} request failed: {exc}"
+            print(last_llm_error)
+            _set_cooldown(key, 5.0)
+            return None
+
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            except Exception:
+                content = ""
+            content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
+            if content:
+                return content
+            last_llm_error = f"{key}: empty content (token limit?)"
+            print(last_llm_error)
+            _set_cooldown(key, 5.0)
+            return None
+
+        text_l = (resp.text or "").lower()
+        last_llm_error = f"{key} HTTP {resp.status_code}: {(resp.text or '')[:300]}"
+        print(f"LLM API error -> {last_llm_error}")
+
+        if resp.status_code == 400 and "reasoning" in text_l and "reasoning_effort" in body and attempt == 0:
+            body.pop("reasoning_effort", None)
+            continue
+        if resp.status_code == 429:
+            _set_cooldown(key, _parse_retry_seconds(resp))
+        elif resp.status_code == 413:
+            _set_cooldown(key, 300.0)  # request too big for this model's per-minute limit
+        elif resp.status_code == 404 or (
+            resp.status_code == 400
+            and any(w in text_l for w in ("not found", "decommissioned", "does not exist", "deprecated", "model_not_found"))
+        ):
+            _set_cooldown(key, 3600.0)  # model name no longer valid: stop trying for a while
+        elif resp.status_code in (401, 403):
+            _set_cooldown(key, 600.0)
+        else:
+            _set_cooldown(key, 10.0)
+        return None
+    return None
+
+
+def call_llm(system_prompt: str, user_prompt: str, max_tokens: int, light: bool = False) -> Optional[str]:
+    """Tries every configured model in order; skips models that are cooling down after a rate limit."""
+    global last_llm_error
+    last_llm_error = ""
+    chain = build_chain(light)
+    if not chain:
+        last_llm_error = "No LLM provider configured (set GROQ_API_KEY and/or GEMINI_API_KEY)."
+        return None
+
+    for round_no in range(2):
+        now = time.time()
+        for entry in chain:
+            key = f"{entry['provider']}:{entry['model']}"
+            if model_cooldown.get(key, 0.0) > now:
+                continue
+            result = _call_single(entry, system_prompt, user_prompt, max_tokens)
+            if result:
+                return result
+            now = time.time()
+
+        if round_no == 0:
+            now = time.time()
+            waits = [
+                model_cooldown[f"{e['provider']}:{e['model']}"] - now
+                for e in chain
+                if model_cooldown.get(f"{e['provider']}:{e['model']}", 0.0) > now
+            ]
+            if waits and min(waits) <= LLM_MAX_WAIT_SECONDS:
+                time.sleep(min(waits) + 0.3)
+                continue
+        break
+    return None
 
 
 def expand_query(query: str) -> List[str]:
@@ -271,7 +766,7 @@ def expand_query(query: str) -> List[str]:
         "made by another woman with strict regard to decency'). Cover different legal angles. "
         "Output exactly 5 lines, one query per line, no numbering, no explanations."
     )
-    out = call_llm(system, query, 600)
+    out = call_llm(system, query, 400, light=True)
     if not out:
         return []
     lines = []
@@ -280,6 +775,44 @@ def expand_query(query: str) -> List[str]:
         if 3 <= len(ln) <= 200:
             lines.append(ln)
     return lines[:5]
+
+
+def prepare_search_queries(query: str, lang: str) -> Tuple[str, List[str]]:
+    """Returns (english_query, expansions). Urdu / Roman Urdu questions are translated to English for retrieval,
+    because the indexed books and the embedding model are English."""
+    if lang == "english":
+        return query, expand_query(query)
+
+    if not llm_enabled():
+        return glossary_translate(query), []
+
+    label = "Urdu (Arabic script)" if lang == "urdu" else "Roman Urdu (Urdu written in English letters)"
+    system = (
+        "You help search the Constitution of Pakistan (1973) and the Code of Criminal Procedure (1898). "
+        f"The user's question is written in {label}. "
+        "Line 1: translate the question into plain, natural English (one line, no label). "
+        "Lines 2-6: write 5 short English search queries (max 16 words each). Queries 1-3 must use the formal legal "
+        "vocabulary and the section/article HEADING wording those books use (for example: 'safeguards as to arrest and "
+        "detention', 'protection against self-incrimination', 'mode of searching women'). Queries 4-5 must be written as "
+        "the likely WORDING of the legal rule itself, in the style of an old statute. Cover different legal angles. "
+        "Output exactly 6 lines, one per line, no numbering, no labels, no explanations."
+    )
+    out = call_llm(system, query, 500, light=True)
+    lines: List[str] = []
+    if out:
+        for ln in out.splitlines():
+            ln = re.sub(r"^[\s\-\*\d\.\)]+", "", ln).strip()
+            ln = re.sub(r"^(english|translation)\s*:\s*", "", ln, flags=re.IGNORECASE).strip()
+            if 3 <= len(ln) <= 300:
+                lines.append(ln)
+    if not lines:
+        return glossary_translate(query), []
+
+    english = lines[0]
+    expansions = [ln for ln in lines[1:] if len(ln) <= 200][:5]
+    if not expansions:
+        expansions = expand_query(english)
+    return english, expansions
 
 
 def hybrid_retrieve(queries: List[str], top_k: int = 7, wide: bool = False) -> List[dict]:
@@ -409,6 +942,8 @@ def is_detailed_query(query: str) -> bool:
         "detail", "details", "detailed", "explain", "elaborate", "comprehensive",
         "list all", "what are all", "all rights", "step by step", "steps",
         "procedure", "in depth", "thorough",
+        # Roman Urdu / Urdu
+        "tafseel", "tafsil", "wazahat", "mukammal", "tafseer", "تفصیل", "وضاحت", "مکمل", "طریقہ کار",
     ]
     return any(trigger in q for trigger in detail_triggers)
 
@@ -438,87 +973,71 @@ def extract_citations(reply: str) -> List[Tuple[str, str]]:
     return out
 
 
-def call_llm(system_prompt: str, user_prompt: str, max_tokens: int) -> Optional[str]:
-    """Calls the primary model; on rate limits/errors automatically tries the fallback models."""
-    global last_llm_error
-    last_llm_error = ""
-    models = [LLM_MODEL] + [m for m in LLM_FALLBACK_MODELS if m != LLM_MODEL]
-
-    for model_name in models:
-        body = {
-            "model": model_name,
-            "temperature": 0.0,
-            "max_tokens": max_tokens,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        }
-        if "gpt-oss" in model_name.lower():
-            body["reasoning_effort"] = "low"
-
-        for attempt in range(2):
-            try:
-                with httpx.Client(timeout=45.0) as client:
-                    resp = client.post(
-                        f"{LLM_BASE_URL.rstrip('/')}/chat/completions",
-                        headers={
-                            "Content-Type": "application/json",
-                            "Authorization": f"Bearer {LLM_API_KEY}",
-                        },
-                        json=body,
-                    )
-                if resp.status_code == 200:
-                    data = resp.json()
-                    content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
-                    content = re.sub(r"<think>[\s\S]*?</think>", "", content).strip()
-                    if content:
-                        return content
-                    last_llm_error = f"{model_name}: empty content (token limit?)"
-                    print(last_llm_error)
-                    break
-                last_llm_error = f"{model_name} HTTP {resp.status_code}: {resp.text[:300]}"
-                print(f"LLM API error -> {last_llm_error}")
-                if resp.status_code in (429, 500, 502, 503) and attempt == 0:
-                    try:
-                        wait = float(resp.headers.get("retry-after", "2"))
-                    except ValueError:
-                        wait = 2.0
-                    if wait <= 6:
-                        time.sleep(max(wait, 1.0))
-                        continue
-                break
-            except Exception as exc:
-                last_llm_error = f"{model_name} request failed: {exc}"
-                print(last_llm_error)
-                if attempt == 0:
-                    time.sleep(1.0)
-                    continue
-                break
-    return None
-
-
-def build_reference(reply_text: str, passages: List[dict]) -> Optional[str]:
-    """Reference lines are built ONLY from provisions the answer cites and that really exist in the retrieved text."""
+def build_reference(reply_text: str, passages: List[dict], lang: str = "english") -> Optional[str]:
+    """Reference lines are built ONLY from provisions the answer cites and that really exist in the retrieved text.
+    reply_text must still contain the English 'Article N' / 'Section N' labels. Output is in the user's language."""
+    cfg = LANGS.get(lang, LANGS["english"])
     refs = []
     for kind, num in extract_citations(reply_text):
         p = find_provision_passage(num, kind, passages)
         if p:
-            label = "Article" if kind == "constitution" else "Section"
             title = re.sub(r"\.pdf$", "", p["book_title"], flags=re.IGNORECASE)
-            refs.append(f"{title} - {label} {num}")
+            if lang == "english":
+                label = "Article" if kind == "constitution" else "Section"
+                name = title
+            else:
+                label = cfg["article_label"] if kind == "constitution" else cfg["section_label"]
+                bk = book_kind(p["book_title"])
+                if bk == "constitution":
+                    name = cfg["const_name"]
+                elif bk == "crpc":
+                    name = cfg["crpc_name"]
+                else:
+                    name = title
+            refs.append(f"{name} - {label} {num}")
     refs = list(dict.fromkeys(refs))
     return " | ".join(refs[:4]) if refs else None
 
 
-def generate_with_llm(query: str, passages: List[dict]) -> dict:
+def build_fallback_answer(passages: List[dict], lang: str) -> dict:
+    """Used only when every LLM is unavailable: show the most relevant excerpts instead of an error message."""
+    cfg = LANGS[lang]
+    ranked = sorted(passages, key=lambda p: p.get("final_score", 0.0), reverse=True)
+    top = [p for p in ranked if p.get("final_score", 0.0) > 0][:2] or ranked[:2]
+    blocks = []
+    for p in top:
+        kind = book_kind(p["book_title"])
+        if kind == "constitution":
+            name = cfg["const_name"]
+        elif kind == "crpc":
+            name = cfg["crpc_name"]
+        else:
+            name = p["book_title"]
+        txt = p["cleaned"]
+        if len(txt) > 900:
+            cut = txt[:900]
+            last = max(cut.rfind(". "), cut.rfind("; "))
+            txt = (cut[: last + 1] if last > 400 else cut) + " ..."
+        blocks.append(f"**{name}**\n{txt}")
+    reply = cfg["fallback_intro"] + "\n\n" + "\n\n".join(blocks)
+    return {"status": "fallback", "reply": reply, "reference": None}
+
+
+def generate_with_llm(query: str, passages: List[dict], lang: str = "english", english_query: str = "") -> dict:
     """Returns {"status": "ok"|"out"|"error", "reply": str, "reference": Optional[str]}."""
     if not llm_enabled():
-        print(f"LLM skipped: LLM_BASE_URL={bool(LLM_BASE_URL)}, LLM_API_KEY={bool(LLM_API_KEY)}")
-        return {"status": "error", "reply": BUSY_MSG, "reference": None}
+        print(f"LLM skipped: no provider configured (LLM_BASE_URL={bool(LLM_BASE_URL)}, "
+              f"LLM_API_KEY={bool(LLM_API_KEY)}, GEMINI_API_KEY={bool(GEMINI_API_KEY)})")
+        return {"status": "error", "reply": "", "reference": None}
 
-    detailed = is_detailed_query(query)
-    max_tokens = 1800 if detailed else 1200
+    cfg = LANGS.get(lang, LANGS["english"])
+    detailed = is_detailed_query(query) or is_detailed_query(english_query)
+    if lang == "urdu":
+        max_tokens = 3000 if detailed else 2200
+    elif lang == "roman_urdu":
+        max_tokens = 2400 if detailed else 1600
+    else:
+        max_tokens = 1800 if detailed else 1200
 
     context_blocks = []
     for idx, p in enumerate(passages, start=1):
@@ -530,7 +1049,7 @@ def generate_with_llm(query: str, passages: List[dict]) -> dict:
     context_text = "\n\n".join(context_blocks)
 
     rules = (
-        "You are a Pakistani Legal AI Assistant. Always respond strictly in English. "
+        f"You are a Pakistani Legal AI Assistant. {cfg['instruction']} "
         "You may use ONLY the excerpts provided, which come from the Constitution of the Islamic Republic of "
         "Pakistan (1973) and the Code of Criminal Procedure (CrPC 1898).\n"
         "1. UNDERSTAND EVERYDAY WORDING: users are ordinary people. Match their question to the excerpts by LEGAL MEANING, "
@@ -556,27 +1075,37 @@ def generate_with_llm(query: str, passages: List[dict]) -> dict:
     )
     if detailed:
         rules += (
-            "7. STRUCTURE (use exactly these bold headings):\n**Most Relevant**\nThe single most relevant provision in bold "
-            "with a clear explanation (3-4 sentences) in simple English.\n**Supported Articles**\nOther relevant provisions in "
-            "bold, each with a short explanation of how it relates. If there are none, write: No other directly relevant provision found."
+            f"7. STRUCTURE (use exactly these bold headings):\n**{cfg['most_relevant']}**\nThe single most relevant provision in bold "
+            f"with a clear explanation (3-4 sentences) in simple {cfg['simple_name']}.\n**{cfg['supported']}**\nOther relevant provisions in "
+            f"bold, each with a short explanation of how it relates. If there are none, write: {cfg['no_other']}"
         )
     else:
         rules += (
-            "7. LENGTH: short, clear and direct in simple English (3-5 sentences). Start with 'Yes.' or 'No.' (or "
-            "'Generally, no.') for yes/no questions ('Can...', 'Does...', 'Is...'), then explain with the exact provision."
+            f"7. LENGTH: short, clear and direct in simple {cfg['simple_name']} (3-5 sentences). Start with '{cfg['yes']}' or "
+            f"'{cfg['no']}' (or '{cfg['generally_no']}') for yes/no questions ('Can...', 'Does...', 'Is...'), then explain "
+            "with the exact provision."
         )
 
-    user_prompt = f"Excerpts:\n{context_text}\n\nQuestion: {query}"
+    def make_prompt(extra: str = "") -> str:
+        prompt = f"Excerpts:\n{context_text}\n\nQuestion: {query}"
+        if english_query and english_query.strip().lower() != query.strip().lower():
+            prompt += f"\nEnglish meaning of the question: {english_query}"
+        return prompt + extra
+
+    user_prompt = make_prompt()
 
     reply_text = ""
     for attempt in range(2):
         content = call_llm(rules, user_prompt, max_tokens)
         if not content:
-            return {"status": "error", "reply": BUSY_MSG, "reference": None}
+            return {"status": "error", "reply": "", "reference": None}
         if "OUT_OF_SCOPE" in content[:80]:
-            return {"status": "out", "reply": OUT_OF_SCOPE_MSG, "reference": None}
+            return {"status": "out", "reply": cfg["out_of_scope"], "reference": None}
 
         reply_text = normalize_reply_formatting(content)
+        if lang != "english":
+            # If the model wrote native labels (دفعہ / آرٹیکل / Dafa) itself, restore English labels for verification.
+            reply_text = to_english_labels(reply_text)
         bad = [
             f"{'Article' if k == 'constitution' else 'Section'} {n}"
             for k, n in extract_citations(reply_text)
@@ -584,14 +1113,16 @@ def generate_with_llm(query: str, passages: List[dict]) -> dict:
         ]
         if not bad:
             break
-        user_prompt = (
-            f"Excerpts:\n{context_text}\n\nQuestion: {query}\n\n"
-            f"WARNING: your previous answer cited {', '.join(bad)}, which does NOT appear in the excerpts. "
+        user_prompt = make_prompt(
+            f"\n\nWARNING: your previous answer cited {', '.join(bad)}, which does NOT appear in the excerpts. "
             "Answer again citing only provisions whose number actually appears in the excerpts and describe each "
             "provision only by what its own text says."
         )
 
-    return {"status": "ok", "reply": reply_text, "reference": build_reference(reply_text, passages)}
+    # Verified in English above; now present reference and citations in the user's language.
+    reference = build_reference(reply_text, passages, lang)
+    final_reply = localize_citations(reply_text, lang)
+    return {"status": "ok", "reply": final_reply, "reference": reference}
 
 
 @app.get("/health")
@@ -599,29 +1130,38 @@ def health_check():
     count = collection.count() if collection is not None else 0
     return {
         "status": "ok",
-        "version": "v6-llm-fallback",
+        "version": "v8-localized-citations",
         "collection": COLLECTION_NAME,
         "indexed_chunks": count,
-        "llm_enabled": bool(LLM_API_KEY and LLM_BASE_URL),
+        "llm_enabled": llm_enabled(),
         "llm_model": LLM_MODEL if (LLM_API_KEY and LLM_BASE_URL) else None,
+        "gemini_enabled": bool(GEMINI_API_KEY),
+        "languages": ["english", "urdu", "roman_urdu"],
         "env_file_loaded": ENV_PATH.exists(),
     }
 
 
 @app.get("/llm-test")
 def llm_test():
-    """Open this URL in a browser to see whether the AI service (Groq) is working, and the exact error if not."""
-    out = call_llm("Reply with exactly the word: OK", "ping", 300)
+    """Open this URL in a browser to see whether the AI services (Gemini/Groq) are working, and the exact error if not."""
+    out = call_llm("Reply with exactly the word: OK", "ping", 300, light=True)
+    now = time.time()
     return {
         "ok": bool(out),
         "reply": (out or "")[:50],
-        "models_tried_in_order": [LLM_MODEL] + [m for m in LLM_FALLBACK_MODELS if m != LLM_MODEL],
+        "models_tried_in_order": chain_names(False),
+        "light_models_in_order": chain_names(True),
+        "cooling_down_seconds": {
+            k: round(v - now) for k, v in model_cooldown.items() if v > now
+        },
         "last_error": last_llm_error,
     }
 
 
 GREETING_RE = re.compile(
-    r"^\s*(hi|hello|hey|salam|assalam[\s-]?o[\s-]?alaikum|good (morning|evening|afternoon)|thanks|thank you)\W*$",
+    r"^\s*(hi|hello|hey|salam|salaam|aoa|assalam[\s-]?o[\s-]?alaikum|assalamu[\s-]?alaikum|assalamualaikum|"
+    r"good (morning|evening|afternoon)|thanks|thank you|shukriya|shukria|jazak[\s-]?allah|"
+    r"السلام علیکم|سلام|ہیلو|شکریہ)\W*$",
     re.IGNORECASE,
 )
 
@@ -632,38 +1172,62 @@ def chat_endpoint(payload: ChatRequest):
     if not query:
         raise HTTPException(status_code=400, detail="Query text cannot be empty.")
 
+    lang = detect_language(query)
+    cfg = LANGS[lang]
+
     if GREETING_RE.match(query):
         return ChatResponse(
-            reply="Hello! Ask me any question about the Constitution of Pakistan (1973) or the Code of Criminal Procedure (CrPC 1898), and I will answer from those books.",
+            reply=cfg["greeting"],
             reference=None,
-            disclaimer=SHORT_DISCLAIMER,
+            disclaimer=cfg["disclaimer"],
+            language=lang,
         )
 
     if collection is None or model is None:
         raise HTTPException(status_code=503, detail="Backend services are starting up.")
 
+    cached = cache_get(lang, query)
+    if cached:
+        print(f"Cache hit ({lang})")
+        return ChatResponse(**cached)
+
     try:
-        queries = [query] + expand_query(query)
-        print(f"Search queries: {queries}")
+        english_query, expansions = prepare_search_queries(query, lang)
+        queries = [english_query] + expansions
+        print(f"Language={lang} | Search queries: {queries}")
         passages = hybrid_retrieve(queries, top_k=7)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"ChromaDB query failed: {exc}")
 
     if not passages or passages[0].get("best_vec", 0.0) < 0.2:
-        return ChatResponse(reply=OUT_OF_SCOPE_MSG, reference=None, disclaimer=SHORT_DISCLAIMER)
+        return ChatResponse(
+            reply=cfg["out_of_scope"], reference=None, disclaimer=cfg["disclaimer"], language=lang
+        )
 
-    result = generate_with_llm(query, passages)
+    result = generate_with_llm(query, passages, lang, english_query)
     if result["status"] == "out":
         try:
             wide_passages = hybrid_retrieve(queries, top_k=12, wide=True)
             if wide_passages:
                 print("Retrying with wider context before declaring out of scope.")
-                result = generate_with_llm(query, wide_passages)
+                retry = generate_with_llm(query, wide_passages, lang, english_query)
+                if retry["status"] != "error":
+                    result = retry
         except Exception as exc:
             print(f"Wide retry failed: {exc}")
+
+    if result["status"] == "error":
+        # All models unavailable: show the most relevant law excerpts instead of a "busy" message.
+        print(f"All LLMs unavailable, using excerpt fallback. Last error: {last_llm_error}")
+        result = build_fallback_answer(passages, lang)
+
     print(f"Answer status={result['status']} reference={result['reference']}")
-    return ChatResponse(
-        reply=result["reply"],
-        reference=result["reference"],
-        disclaimer=SHORT_DISCLAIMER,
-    )
+    response_data = {
+        "reply": result["reply"],
+        "reference": result["reference"],
+        "disclaimer": cfg["disclaimer"],
+        "language": lang,
+    }
+    if result["status"] in ("ok", "out"):
+        cache_set(lang, query, response_data)
+    return ChatResponse(**response_data)
