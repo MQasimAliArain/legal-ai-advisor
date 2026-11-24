@@ -78,10 +78,6 @@ export default function Sidebar({
   };
 
   const handleOpenSettings = () => {
-    if (!user) {
-      navigate('/login');
-      return;
-    }
     setShowSettingsModal(true);
   };
 
@@ -105,7 +101,11 @@ export default function Sidebar({
       onPinChat(chat.id);
     }
     setActiveMenu(null);
-    setToastMessage(chat.pinned ? 'Chat unpinned' : 'Chat pinned to top');
+    if (lang === 'ur') {
+      setToastMessage(chat.pinned ? 'گفتگو ان پن کر دی گئی' : 'گفتگو اوپر پن کر دی گئی');
+    } else {
+      setToastMessage(chat.pinned ? 'Chat unpinned' : 'Chat pinned to top');
+    }
     setTimeout(() => setToastMessage(''), 2200);
   };
 
@@ -120,14 +120,14 @@ export default function Sidebar({
 
   const handleCopyShareLink = () => {
     navigator.clipboard.writeText(getShareUrl());
-    setToastMessage('Link copied to clipboard!');
+    setToastMessage(lang === 'ur' ? 'لنک کاپی ہو گیا!' : 'Link copied to clipboard!');
     setTimeout(() => setToastMessage(''), 2200);
   };
 
   const handleSaveRename = (chatId) => {
     if (editTitle.trim()) {
       onRenameChat(chatId, editTitle.trim());
-      setToastMessage('Chat renamed');
+      setToastMessage(lang === 'ur' ? 'گفتگو کا نام تبدیل ہو گیا' : 'Chat renamed');
       setTimeout(() => setToastMessage(''), 2200);
     }
     setEditingChatId(null);
@@ -136,7 +136,7 @@ export default function Sidebar({
   const confirmDeleteChat = () => {
     if (chatToDelete) {
       onDeleteChat(chatToDelete.id);
-      setToastMessage('Chat deleted');
+      setToastMessage(lang === 'ur' ? 'گفتگو حذف کر دی گئی' : 'Chat deleted');
       setTimeout(() => setToastMessage(''), 2200);
     }
     setChatToDelete(null);
@@ -318,7 +318,7 @@ export default function Sidebar({
                 {isOpen && (
                   <p className="text-[10px] font-semibold text-emerald-500 px-2 py-1 uppercase tracking-wider flex items-center gap-1">
                     <Pin className="w-3 h-3 fill-emerald-500" />
-                    Pinned
+                    {lang === 'ur' ? 'پن شدہ' : 'Pinned'}
                   </p>
                 )}
                 {pinnedChats.map(renderChatItem)}
@@ -341,23 +341,21 @@ export default function Sidebar({
 
         {/* Footer Actions: Settings & Profile */}
         <div className={`pt-2.5 pb-12 md:pb-1 border-t space-y-1.5 shrink-0 ${isDark ? 'border-slate-800' : 'border-slate-200'}`}>
-          {/* Settings option - accessible only when user is logged in */}
-          {user && (
-            <button 
-              onClick={handleOpenSettings}
-              title={!isOpen ? t('settings') : undefined}
-              className={`flex items-center transition rounded-lg text-xs font-medium cursor-pointer ${
-                isOpen ? 'w-full gap-2.5 px-2 py-1.5' : 'w-9 h-9 mx-auto justify-center'
-              } ${
-                isDark 
-                  ? 'text-slate-400 hover:text-white hover:bg-slate-800/60' 
-                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-              }`}
-            >
-              <Settings className="w-4 h-4 shrink-0" />
-              {isOpen && <span>{t('settings')}</span>}
-            </button>
-          )}
+          {/* Settings option - always accessible whether logged in or not */}
+          <button 
+            onClick={handleOpenSettings}
+            title={!isOpen ? t('settings') : undefined}
+            className={`flex items-center transition rounded-lg text-xs font-medium cursor-pointer ${
+              isOpen ? 'w-full gap-2.5 px-2 py-1.5' : 'w-9 h-9 mx-auto justify-center'
+            } ${
+              isDark 
+                ? 'text-slate-400 hover:text-white hover:bg-slate-800/60' 
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+            }`}
+          >
+            <Settings className="w-4 h-4 shrink-0" />
+            {isOpen && <span>{t('settings')}</span>}
+          </button>
 
           {/* Profile / Login Block */}
           {user ? (
@@ -452,7 +450,9 @@ export default function Sidebar({
                   }`}
                 >
                   <Pin className="w-3.5 h-3.5 text-slate-400" />
-                  {chat.pinned ? 'Unpin' : 'Pin'}
+                  {chat.pinned
+                    ? (lang === 'ur' ? 'ان پن کریں' : 'Unpin')
+                    : (lang === 'ur' ? 'پن کریں' : 'Pin')}
                 </button>
 
                 <button
@@ -466,7 +466,7 @@ export default function Sidebar({
                   }`}
                 >
                   <Edit2 className="w-3.5 h-3.5 text-slate-400" />
-                  Rename
+                  {lang === 'ur' ? 'نام تبدیل کریں' : 'Rename'}
                 </button>
 
                 <button
@@ -476,7 +476,7 @@ export default function Sidebar({
                   }`}
                 >
                   <Share2 className="w-3.5 h-3.5 text-slate-400" />
-                  Share
+                  {lang === 'ur' ? 'شیئر کریں' : 'Share'}
                 </button>
 
                 <button
@@ -487,7 +487,7 @@ export default function Sidebar({
                   className="w-full flex items-center gap-2 px-2.5 py-1.5 hover:bg-red-500/10 text-red-400 hover:text-red-300 rounded text-left transition cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  Delete
+                  {lang === 'ur' ? 'حذف کریں' : 'Delete'}
                 </button>
               </>
             );
@@ -496,7 +496,7 @@ export default function Sidebar({
       )}
 
       {/* Settings Modal */}
-      {showSettingsModal && user && (
+      {showSettingsModal && (
         <div
           onClick={() => setShowSettingsModal(false)}
           className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4"
@@ -534,7 +534,7 @@ export default function Sidebar({
                 }`}
               >
                 <Globe className="w-4 h-4 shrink-0" />
-                Language
+                {lang === 'ur' ? 'زبان' : 'Language'}
               </button>
 
               <button
@@ -546,7 +546,7 @@ export default function Sidebar({
                 }`}
               >
                 {theme === 'dark' ? <Moon className="w-4 h-4 shrink-0" /> : <Sun className="w-4 h-4 shrink-0" />}
-                Theme
+                {lang === 'ur' ? 'تھیم' : 'Theme'}
               </button>
 
               <button
@@ -558,7 +558,7 @@ export default function Sidebar({
                 }`}
               >
                 <Shield className="w-4 h-4 shrink-0" />
-                Data & Privacy
+                {lang === 'ur' ? 'ڈیٹا اور رازداری' : 'Data & Privacy'}
               </button>
 
               <button
@@ -570,7 +570,7 @@ export default function Sidebar({
                 }`}
               >
                 <FileText className="w-4 h-4 shrink-0" />
-                Terms & Conditions
+                {lang === 'ur' ? 'شرائط و ضوابط' : 'Terms & Conditions'}
               </button>
             </div>
 
@@ -580,10 +580,12 @@ export default function Sidebar({
               {activeSettingsTab === 'language' && (
                 <div className="space-y-5">
                   <h3 className="text-base font-bold flex items-center gap-2 border-b pb-3 border-slate-700/50">
-                    <Globe className="w-5 h-5 text-emerald-500" /> Interface Language
+                    <Globe className="w-5 h-5 text-emerald-500" /> {lang === 'ur' ? 'انٹرفیس کی زبان' : 'Interface Language'}
                   </h3>
                   <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    Choose your preferred language for the legal AI assistant interface.
+                    {lang === 'ur'
+                      ? 'قانونی اے آئی اسسٹنٹ انٹرفیس کے لیے اپنی پسندیدہ زبان منتخب کریں۔'
+                      : 'Choose your preferred language for the legal AI assistant interface.'}
                   </p>
 
                   <div className="space-y-3 pt-1">
@@ -630,10 +632,12 @@ export default function Sidebar({
               {activeSettingsTab === 'theme' && (
                 <div className="space-y-5">
                   <h3 className="text-base font-bold flex items-center gap-2 border-b pb-3 border-slate-700/50">
-                    {theme === 'dark' ? <Moon className="w-5 h-5 text-emerald-500" /> : <Sun className="w-5 h-5 text-emerald-500" />} Appearance & Theme
+                    {theme === 'dark' ? <Moon className="w-5 h-5 text-emerald-500" /> : <Sun className="w-5 h-5 text-emerald-500" />} {lang === 'ur' ? 'ظاہری شکل اور تھیم' : 'Appearance & Theme'}
                   </h3>
                   <p className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                    Select your preferred interface theme for the entire application.
+                    {lang === 'ur'
+                      ? 'پورے ایپلیکیشن کے لیے اپنی پسندیدہ تھیم منتخب کریں۔'
+                      : 'Select your preferred interface theme for the entire application.'}
                   </p>
 
                   <div className="grid grid-cols-2 gap-3 pt-1">
@@ -646,7 +650,7 @@ export default function Sidebar({
                       }`}
                     >
                       <Moon className="w-6 h-6" />
-                      <span className="text-xs">Dark Theme</span>
+                      <span className="text-xs">{lang === 'ur' ? 'ڈارک تھیم' : 'Dark Theme'}</span>
                     </button>
 
                     <button
@@ -658,7 +662,7 @@ export default function Sidebar({
                       }`}
                     >
                       <Sun className="w-6 h-6" />
-                      <span className="text-xs">Light Theme</span>
+                      <span className="text-xs">{lang === 'ur' ? 'لائٹ تھیم' : 'Light Theme'}</span>
                     </button>
                   </div>
                 </div>
@@ -668,18 +672,24 @@ export default function Sidebar({
               {activeSettingsTab === 'privacy' && (
                 <div className="space-y-4">
                   <h3 className="text-base font-bold flex items-center gap-2 border-b pb-3 border-slate-700/50">
-                    <Shield className="w-5 h-5 text-emerald-500" /> Data & Privacy Policy
+                    <Shield className="w-5 h-5 text-emerald-500" /> {lang === 'ur' ? 'ڈیٹا اور رازداری کی پالیسی' : 'Data & Privacy Policy'}
                   </h3>
 
                   <div className={`text-xs leading-relaxed space-y-3 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                     <p>
-                      <strong>1. Confidentiality:</strong> All legal queries, case uploads, and context inputs are encrypted using enterprise-grade protocols.
+                      <strong>1. {lang === 'ur' ? 'رازداریت:' : 'Confidentiality:'}</strong> {lang === 'ur'
+                        ? 'تمام قانونی سوالات، کیس اپ لوڈز اور سیاق و سباق کا ڈیٹا محفوظ پروٹوکولز کے تحت انکرپٹڈ ہے۔'
+                        : 'All legal queries, case uploads, and context inputs are encrypted using enterprise-grade protocols.'}
                     </p>
                     <p>
-                      <strong>2. Model Training Protection:</strong> Your private legal documents and client data are never used to train public AI models.
+                      <strong>2. {lang === 'ur' ? 'ماڈل ٹریننگ کا تحفظ:' : 'Model Training Protection:'}</strong> {lang === 'ur'
+                        ? 'آپ کے نجی قانونی دستاویزات اور کلائنٹ ڈیٹا کو عوامی اے آئی ماڈلز کی تربیت کے لیے استعمال نہیں کیا جاتا۔'
+                        : 'Your private legal documents and client data are never used to train public AI models.'}
                     </p>
                     <p>
-                      <strong>3. Data Control:</strong> You retain full ownership of your chat history. You can clear or delete individual chats at any time directly from the sidebar.
+                      <strong>3. {lang === 'ur' ? 'ڈیٹا کنٹرول:' : 'Data Control:'}</strong> {lang === 'ur'
+                        ? 'آپ اپنی چیٹ ہسٹری کے مکمل مالک ہیں اور کسی بھی وقت سائیڈ بار سے انفرادی چیٹس حذف کر سکتے ہیں۔'
+                        : 'You retain full ownership of your chat history. You can clear or delete individual chats at any time directly from the sidebar.'}
                     </p>
                   </div>
                 </div>
@@ -689,18 +699,24 @@ export default function Sidebar({
               {activeSettingsTab === 'terms' && (
                 <div className="space-y-4">
                   <h3 className="text-base font-bold flex items-center gap-2 border-b pb-3 border-slate-700/50">
-                    <FileText className="w-5 h-5 text-emerald-500" /> Terms & Conditions
+                    <FileText className="w-5 h-5 text-emerald-500" /> {lang === 'ur' ? 'شرائط و ضوابط' : 'Terms & Conditions'}
                   </h3>
 
                   <div className={`text-xs leading-relaxed space-y-3 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
                     <p>
-                      <strong>1. Legal Information Disclaimer:</strong> Answers provided by Legal AI are for research and informational reference only and do not constitute formal legal counsel.
+                      <strong>1. {lang === 'ur' ? 'قانونی معلومات کی وضاحت:' : 'Legal Information Disclaimer:'}</strong> {lang === 'ur'
+                        ? 'لیگل اے آئی کے فراہم کردہ جوابات صرف تحقیق اور معلومات کے لیے ہیں اور باضابطہ قانونی مشورہ نہیں ہیں۔'
+                        : 'Answers provided by Legal AI are for research and informational reference only and do not constitute formal legal counsel.'}
                     </p>
                     <p>
-                      <strong>2. Professional Verification:</strong> Advocates and legal practitioners must independently verify statutory citations and judicial precedents before filing in court.
+                      <strong>2. {lang === 'ur' ? 'پیشہ ورانہ تصدیق:' : 'Professional Verification:'}</strong> {lang === 'ur'
+                        ? 'وکلاء اور قانونی ماہرین عدالت میں دائر کرنے سے قبل قانونی حوالوں اور عدالتی نظائر کی خود تصدیق کریں۔'
+                        : 'Advocates and legal practitioners must independently verify statutory citations and judicial precedents before filing in court.'}
                     </p>
                     <p>
-                      <strong>3. Acceptable Use:</strong> Users agree to comply with applicable local laws and regulations governing digital tools and data privacy.
+                      <strong>3. {lang === 'ur' ? 'قابل قبول استعمال:' : 'Acceptable Use:'}</strong> {lang === 'ur'
+                        ? 'صارفین ڈیجیٹل ٹولز اور ڈیٹا پرائیویسی سے متعلق مقامی قوانین کی پابندی کرنے کے پابند ہیں۔'
+                        : 'Users agree to comply with applicable local laws and regulations governing digital tools and data privacy.'}
                     </p>
                   </div>
                 </div>
@@ -730,7 +746,7 @@ export default function Sidebar({
                 <Share2 className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-base font-bold">Share Legal Query</h3>
+                <h3 className="text-base font-bold">{lang === 'ur' ? 'قانونی سوال شیئر کریں' : 'Share Legal Query'}</h3>
                 <p className={`text-xs truncate max-w-[280px] ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>"{shareChat.title}"</p>
               </div>
             </div>
@@ -779,7 +795,7 @@ export default function Sidebar({
               <label className={`text-[11px] font-semibold uppercase tracking-wider ${
                 isDark ? 'text-slate-400' : 'text-slate-500'
               }`}>
-                Or copy link
+                {lang === 'ur' ? 'یا لنک کاپی کریں' : 'Or copy link'}
               </label>
               <div className={`flex items-center gap-2 border rounded-xl p-1.5 ${
                 isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-50 border-slate-200'
@@ -797,7 +813,7 @@ export default function Sidebar({
                   className="flex items-center gap-1.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold px-3 py-1.5 rounded-lg text-xs transition shrink-0 cursor-pointer"
                 >
                   <Copy className="w-3.5 h-3.5" />
-                  Copy
+                  {lang === 'ur' ? 'کاپی' : 'Copy'}
                 </button>
               </div>
             </div>
@@ -815,9 +831,13 @@ export default function Sidebar({
               <Trash2 className="w-6 h-6" />
             </div>
             
-            <h3 className="text-lg font-bold">Delete Chat?</h3>
+            <h3 className="text-lg font-bold">{lang === 'ur' ? 'گفتگو حذف کریں؟' : 'Delete Chat?'}</h3>
             <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-              Are you sure you want to delete <span className="font-semibold text-emerald-500">"{chatToDelete.title}"</span>? This action cannot be undone.
+              {lang === 'ur' ? (
+                <>کیا آپ واقعی <span className="font-semibold text-emerald-500">"{chatToDelete.title}"</span> کو حذف کرنا چاہتے ہیں؟ یہ عمل واپس نہیں ہو سکتا۔</>
+              ) : (
+                <>Are you sure you want to delete <span className="font-semibold text-emerald-500">"{chatToDelete.title}"</span>? This action cannot be undone.</>
+              )}
             </p>
 
             <div className="flex gap-3 pt-2">
@@ -827,13 +847,13 @@ export default function Sidebar({
                   isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
                 }`}
               >
-                Cancel
+                {lang === 'ur' ? 'منسوخ کریں' : 'Cancel'}
               </button>
               <button
                 onClick={confirmDeleteChat}
                 className="flex-1 py-2 px-4 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-semibold transition cursor-pointer"
               >
-                Delete
+                {lang === 'ur' ? 'حذف کریں' : 'Delete'}
               </button>
             </div>
           </div>
@@ -850,9 +870,9 @@ export default function Sidebar({
               <AlertCircle className="w-6 h-6" />
             </div>
             
-            <h3 className="text-lg font-bold">Log Out Confirmation</h3>
+            <h3 className="text-lg font-bold">{lang === 'ur' ? 'لاگ آؤٹ کی تصدیق' : 'Log Out Confirmation'}</h3>
             <p className={`text-xs leading-relaxed ${isDark ? 'text-slate-300' : 'text-slate-600'}`}>
-              Are you sure you want to exit your current session?
+              {lang === 'ur' ? 'کیا آپ واقعی اپنا موجودہ سیشن ختم کرنا چاہتے ہیں؟' : 'Are you sure you want to exit your current session?'}
             </p>
 
             <div className="flex gap-3 pt-2">
@@ -862,13 +882,13 @@ export default function Sidebar({
                   isDark ? 'bg-slate-800 hover:bg-slate-700 text-slate-200' : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
                 }`}
               >
-                Cancel
+                {lang === 'ur' ? 'منسوخ کریں' : 'Cancel'}
               </button>
               <button
                 onClick={confirmLogout}
                 className="flex-1 py-2 px-4 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-semibold transition cursor-pointer"
               >
-                Log Out
+                {t('logout')}
               </button>
             </div>
           </div>
