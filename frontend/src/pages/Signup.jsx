@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../supabase/supabaseClient';
-import { User, Mail, Lock, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { User, Mail, Lock, AlertCircle, Eye, EyeOff, Phone, MapPin, Scale } from 'lucide-react';
 
 export default function Signup() {
+  const [role, setRole] = useState('user');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
+  const [contactNumber, setContactNumber] = useState('');
+  const [location, setLocation] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -35,6 +38,18 @@ export default function Signup() {
     return emailRegex.test(mail);
   };
 
+  // Helper function to validate contact number for lawyers
+  const validateContactNumber = (phone) => {
+    const cleaned = phone.trim();
+    const phoneRegex = /^[+]?[\d\s\-()]{7,20}$/;
+    return phoneRegex.test(cleaned) && /\d{7,}/.test(cleaned.replace(/\D/g, ''));
+  };
+
+  // Helper function to validate location / area for lawyers
+  const validateLocation = (area) => {
+    return area.trim().length >= 2;
+  };
+
   const handleSignup = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -54,6 +69,21 @@ export default function Signup() {
       return;
     }
 
+    // 2b. Lawyer-specific fields validation
+    if (role === 'lawyer') {
+      if (!validateContactNumber(contactNumber)) {
+        setError('Please enter a valid contact number.');
+        setLoading(false);
+        return;
+      }
+
+      if (!validateLocation(location)) {
+        setError('Please enter your location or area.');
+        setLoading(false);
+        return;
+      }
+    }
+
     // 3. Password strength validation
     if (!validatePassword(password)) {
       setError('Password must be at least 8 characters long and include uppercase, lowercase, number, and special character.');
@@ -69,13 +99,21 @@ export default function Signup() {
     }
 
     try {
+      const metadata = {
+        username: username.trim(),
+        role,
+      };
+
+      if (role === 'lawyer') {
+        metadata.contact_number = contactNumber.trim();
+        metadata.location = location.trim();
+      }
+
       const { data, error: signUpError } = await supabase.auth.signUp({
         email,
         password,
         options: {
-          data: {
-            username: username.trim(),
-          },
+          data: metadata,
         },
       });
 
@@ -127,6 +165,36 @@ export default function Signup() {
 
         <form onSubmit={handleSignup} className="space-y-4">
           <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Account Type</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setRole('user')}
+                className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  role === 'user'
+                    ? 'bg-emerald-500/15 border-emerald-500 text-emerald-400'
+                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                }`}
+              >
+                <User className="w-4 h-4" />
+                <span>User</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setRole('lawyer')}
+                className={`flex items-center justify-center gap-2 rounded-xl border py-2.5 text-xs font-semibold transition-colors cursor-pointer ${
+                  role === 'lawyer'
+                    ? 'bg-emerald-500/15 border-emerald-500 text-emerald-400'
+                    : 'bg-slate-800 border-slate-700 text-slate-400 hover:text-white'
+                }`}
+              >
+                <Scale className="w-4 h-4" />
+                <span>Lawyer</span>
+              </button>
+            </div>
+          </div>
+
+          <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Username</label>
             <div className="relative">
               <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
@@ -160,6 +228,44 @@ export default function Signup() {
               />
             </div>
           </div>
+
+          {role === 'lawyer' && (
+            <>
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Contact Number</label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+                    <Phone className="w-4 h-4" />
+                  </span>
+                  <input
+                    type="tel"
+                    required
+                    value={contactNumber}
+                    onChange={(e) => setContactNumber(e.target.value)}
+                    className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                    placeholder="e.g. +92 300 1234567"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Location / Area</label>
+                <div className="relative">
+                  <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-500">
+                    <MapPin className="w-4 h-4" />
+                  </span>
+                  <input
+                    type="text"
+                    required
+                    value={location}
+                    onChange={(e) => setLocation(e.target.value)}
+                    className="w-full rounded-xl bg-slate-800 border border-slate-700 pl-10 pr-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition-colors"
+                    placeholder="e.g. Gulberg, Lahore"
+                  />
+                </div>
+              </div>
+            </>
+          )}
 
           <div>
             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">Password</label>
